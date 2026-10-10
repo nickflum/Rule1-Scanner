@@ -1,0 +1,55 @@
+yaml
+name: Daily Rule 1 screen
+
+on:
+  schedule:
+    # 22:30 UTC Monday-Friday = after the US market close
+    # (about 8:30-9:30am Sydney time, Tuesday-Saturday)
+    - cron: "30 22 * * 1-5"
+  workflow_dispatch: {}   # lets you press "Run workflow" by hand
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Run the screener
+        env:
+          SEC_CONTACT: ${{ secrets.SEC_CONTACT }}
+          UNIVERSE: ${{ vars.UNIVERSE || 'sp500' }}
+        run: python screener.py
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
