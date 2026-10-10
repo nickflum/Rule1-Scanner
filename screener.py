@@ -2,7 +2,8 @@
 Rule #1 screener — builds site/data.json for the dashboard.
 
 What it does, in order:
-  1. Gets the list of companies to screen (S&P 500 by default, plus watchlist.txt).
+  1. Gets the list of companies to screen (S&P 500 + every Nasdaq-listed company by
+     default, plus watchlist.txt), and each company's SEC industry (SIC) code.
   2. Downloads up to ~10+ years of annual financials for each from SEC EDGAR (free).
   3. Works out Phil Town's "Big Five" (ROIC, sales, EPS, equity, free cash flow growth),
      the debt test, and a few management signals.
@@ -14,7 +15,8 @@ What it does, in order:
 
 Settings come from environment variables (set in the GitHub workflow):
   SEC_CONTACT  your email address — the SEC requires one in every request (required)
-  UNIVERSE     "sp500" (default) or "sp1500" (S&P 500 + 400 + 600)
+  UNIVERSE     comma-separated list of: sp500, sp400, sp600, sp1500 (= all three), nasdaq.
+               Default "sp500,nasdaq".
 """
 
 import datetime as dt
@@ -22,7 +24,9 @@ import json
 import math
 import os
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import StringIO
 
 import numpy as np
@@ -30,9 +34,12 @@ import pandas as pd
 import requests
 
 SEC_CONTACT = os.environ.get("SEC_CONTACT", "").strip()
-UNIVERSE = os.environ.get("UNIVERSE", "sp500").strip().lower() or "sp500"
+UNIVERSE = os.environ.get("UNIVERSE", "").strip().lower() or "sp500,nasdaq"
 OUT_DIR = os.environ.get("OUT_DIR", "site")
-SEC_DELAY = 0.12  # SEC allows max 10 requests/second
+CACHE_DIR = os.environ.get("CACHE_DIR", "cache")
+SEC_RATE = 8          # requests per second, kept under the SEC's limit of 10
+SEC_WORKERS = 6       # parallel downloads
+SIC_MAX_AGE_DAYS = 90 # re-check a company's industry code this often
 
 WIKI = {
     "sp500": "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
@@ -91,8 +98,30 @@ def make_session(user_agent):
     return s
 
 
-def get(session, url, tries=3, timeout=30):
+class RateLimiter:
+    """Spaces out request starts across threads so we never exceed `per_sec`."""
+
+    def __init__(self, per_sec):
+        self.gap = 1.0 / per_sec
+        self.lock = threading.Lock()
+        self.next = 0.0
+
+    def wait(self):
+        with self.lock:
+            now = time.monotonic()
+            t = max(now, self.next)
+            self.next = t + self.gap
+        if t > now:
+            time.sleep(t - now)
+
+
+SEC_LIMIT = RateLimiter(SEC_RATE)
+
+
+def get(session, url, tries=3, timeout=30, limiter=None):
     for i in range(tries):
+        if limiter:
+            limiter.wait()
         try:
             r = session.get(url, timeout=timeout)
             if r.status_code == 200:
@@ -100,6 +129,8 @@ def get(session, url, tries=3, timeout=30):
             if r.status_code == 404:
                 return None
             log(f"  HTTP {r.status_code} for {url}")
+            if r.status_code in (403, 429):
+                time.sleep(10)  # SEC is asking us to slow down
         except requests.RequestException as e:
             log(f"  {type(e).__name__} for {url}")
         time.sleep(1.5 * (i + 1))
@@ -159,27 +190,56 @@ def standardise(t, index_name):
     return out
 
 
-def get_universe(wiki_session):
+def universe_parts():
+    toks = {t.strip() for t in UNIVERSE.split(",") if t.strip()}
+    if "sp1500" in toks:
+        toks |= {"sp500", "sp400", "sp600"}
+    return toks
+
+
+def get_index_lists(wiki_session, toks):
+    """S&P index members from Wikipedia (gives GICS sector / sub-industry)."""
     parts = []
-    t = wiki_table(wiki_session, WIKI["sp500"])
-    if t is None:
-        log("Wikipedia S&P 500 list unavailable, using backup CSV")
-        r = get(wiki_session, SP500_CSV)
-        if r is not None:
-            t = pd.read_csv(StringIO(r.text))
-    if t is not None:
-        parts.append(standardise(t, "S&P 500"))
-    if UNIVERSE == "sp1500":
-        for key, label in (("sp400", "S&P 400"), ("sp600", "S&P 600")):
+    if "sp500" in toks:
+        t = wiki_table(wiki_session, WIKI["sp500"])
+        if t is None:
+            log("Wikipedia S&P 500 list unavailable, using backup CSV")
+            r = get(wiki_session, SP500_CSV)
+            if r is not None:
+                t = pd.read_csv(StringIO(r.text))
+        if t is not None:
+            parts.append(standardise(t, "S&P 500"))
+        else:
+            log("Could not load the S&P 500 list")
+    for key, label in (("sp400", "S&P 400"), ("sp600", "S&P 600")):
+        if key in toks:
             t = wiki_table(wiki_session, WIKI[key])
             if t is not None:
                 parts.append(standardise(t, label))
             else:
                 log(f"Could not load {label} list")
-    if not parts:
-        raise SystemExit("Could not load any index constituent list.")
-    uni = pd.concat(parts).drop_duplicates("ticker").reset_index(drop=True)
-    return uni
+    return parts
+
+
+SUFFIX_JUNK = ("W", "WS", "U", "R", "RT")  # warrants, units, rights
+
+
+def nasdaq_list(exch_rows):
+    """One row per company listed on Nasdaq, from the SEC's ticker/exchange file.
+    Companies with several tickers (share classes, warrants, units) keep the simplest one."""
+    by_cik = {}
+    for cik, name, ticker, exch in exch_rows:
+        if not ticker or (exch or "").lower() != "nasdaq":
+            continue
+        t = norm_ticker(ticker)
+        best = by_cik.get(cik)
+        junk = len(t) == 5 and t.endswith(SUFFIX_JUNK)
+        rank = (junk, "-" in t, len(t), t)
+        if best is None or rank < best[0]:
+            by_cik[cik] = (rank, t, name)
+    rows = [{"ticker": t, "name": name, "sector": "", "sub": "", "index": "Nasdaq"}
+            for _, t, name in by_cik.values()]
+    return pd.DataFrame(rows, columns=["ticker", "name", "sector", "sub", "index"])
 
 
 def read_watchlist(path="watchlist.txt"):
@@ -195,13 +255,130 @@ def read_watchlist(path="watchlist.txt"):
 
 
 def sec_ticker_map(sec):
-    r = get(sec, "https://www.sec.gov/files/company_tickers.json")
-    if r is None:
-        raise SystemExit("Could not download the SEC ticker list. Check SEC_CONTACT is a real email.")
+    """Ticker -> (CIK, name) for every SEC filer, plus the raw rows with each ticker's exchange."""
+    rows = []
+    r = get(sec, "https://www.sec.gov/files/company_tickers_exchange.json", limiter=SEC_LIMIT)
+    if r is not None:
+        j = r.json()
+        f = j["fields"]
+        ci, ni, ti, ei = f.index("cik"), f.index("name"), f.index("ticker"), f.index("exchange")
+        rows = [(int(d[ci]), d[ni], d[ti], d[ei]) for d in j["data"]]
+    else:
+        log("SEC ticker/exchange file unavailable; Nasdaq list can't be built this run")
+        r = get(sec, "https://www.sec.gov/files/company_tickers.json", limiter=SEC_LIMIT)
+        if r is None:
+            raise SystemExit("Could not download the SEC ticker list. Check SEC_CONTACT is a real email.")
+        rows = [(int(v["cik_str"]), v["title"], v["ticker"], None) for v in r.json().values()]
     m = {}
-    for row in r.json().values():
-        m[norm_ticker(row["ticker"])] = (int(row["cik_str"]), row["title"])
-    return m
+    for cik, name, ticker, _ in rows:
+        if ticker:
+            m.setdefault(norm_ticker(ticker), (cik, name))
+    return m, rows
+
+
+# --------------------------------------------------------------------------- industry (SIC)
+
+def load_json(path, default):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def get_sic(sec, cik, cache):
+    """SEC industry code + description for a company, cached between runs."""
+    key = str(cik)
+    hit = cache.get(key)
+    today = dt.date.today()
+    if hit and (today - dt.date.fromisoformat(hit[2])).days < SIC_MAX_AGE_DAYS:
+        return hit[0], hit[1]
+    r = get(sec, f"https://data.sec.gov/submissions/CIK{cik:010d}.json", limiter=SEC_LIMIT)
+    if r is None:
+        return (hit[0], hit[1]) if hit else (None, None)
+    j = r.json()
+    try:
+        code = int(j.get("sic") or 0) or None
+    except ValueError:
+        code = None
+    desc = j.get("sicDescription") or None
+    cache[key] = [code, desc, today.isoformat()]
+    return code, desc
+
+
+SMALL = {"and", "of", "the", "for", "in", "on", "or", "to", "a", "with", "nec"}
+
+
+def clean_sic(desc):
+    if not desc:
+        return "Unclassified"
+    d = desc.strip()
+    if d.upper().startswith("SERVICES-"):
+        d = d[9:]
+    words = []
+    for i, w in enumerate(d.replace("-", " - ").split()):
+        lw = w.lower()
+        if lw == "nec":
+            words.append("(NEC)")
+        elif i and lw in SMALL:
+            words.append(lw)
+        else:
+            words.append(lw[:1].upper() + lw[1:])
+    out = " ".join(words).replace(" - ", " – ").replace("( ", "(")
+    return out.replace("&amp;", "&")
+
+
+def sic_sector(sic):
+    """Map an SEC SIC code to the closest of the 11 GICS sectors."""
+    if not sic:
+        return "Other"
+    s = int(sic)
+    if s < 1000: return "Consumer Staples"
+    if 1300 <= s <= 1399: return "Energy"
+    if s < 1500: return "Materials"
+    if s == 1531: return "Consumer Discretionary"
+    if s < 1800: return "Industrials"
+    if s < 2200: return "Consumer Staples"
+    if s < 2400: return "Consumer Discretionary"
+    if s < 2500: return "Materials"
+    if s < 2600: return "Consumer Discretionary"
+    if s < 2700: return "Materials"
+    if s < 2800: return "Communication Services"
+    if 2830 <= s <= 2839: return "Health Care"
+    if 2840 <= s <= 2844: return "Consumer Staples"
+    if s < 2900: return "Materials"
+    if s < 3000: return "Energy"
+    if s == 3021 or 3100 <= s < 3200: return "Consumer Discretionary"
+    if s < 3400: return "Materials"
+    if 3570 <= s <= 3579: return "Information Technology"
+    if s < 3600: return "Industrials"
+    if 3630 <= s <= 3639 or s == 3651: return "Consumer Discretionary"
+    if 3660 <= s <= 3699: return "Information Technology"
+    if s < 3700: return "Industrials"
+    if 3711 <= s <= 3716 or s == 3751: return "Consumer Discretionary"
+    if s < 3800: return "Industrials"
+    if 3840 <= s <= 3851: return "Health Care"
+    if s < 3900: return "Information Technology"
+    if s < 4000: return "Consumer Discretionary"
+    if s < 4800: return "Industrials"
+    if s < 4900: return "Communication Services"
+    if s < 5000: return "Utilities"
+    if s == 5122: return "Health Care"
+    if 5140 <= s <= 5149: return "Consumer Staples"
+    if s < 5200: return "Industrials"
+    if 5400 <= s <= 5499 or s in (5331, 5912): return "Consumer Staples"
+    if s < 6000: return "Consumer Discretionary"
+    if 6500 <= s <= 6599 or s == 6798: return "Real Estate"
+    if s < 7000: return "Financials"
+    if 7370 <= s <= 7379: return "Information Technology"
+    if 7300 <= s < 7400: return "Industrials"
+    if 7800 <= s < 7990: return "Communication Services"
+    if s < 8000: return "Consumer Discretionary"
+    if s < 8100: return "Health Care"
+    if 8200 <= s < 8300: return "Consumer Discretionary"
+    if s == 8731: return "Health Care"
+    if s < 9000: return "Industrials"
+    return "Other"
 
 
 # --------------------------------------------------------------------------- SEC facts
@@ -418,6 +595,7 @@ def analyse(facts):
         "ltDebt": num(lt, 0),
         "debtYears": num(debt_years, 2),
         "sharesChg5": num(shares_chg5),
+        "shares": num(sh_now, 0),
         "flags": flags,
     }
     return result, None
@@ -476,9 +654,11 @@ def prices_yahoo(tickers):
     return out
 
 
-def prices_stooq(session, tickers):
+def prices_stooq(session, tickers, limit=600):
     out = {}
-    for t in tickers:
+    if len(tickers) > limit:
+        log(f"  only trying the first {limit} on Stooq")
+    for t in tickers[:limit]:
         r = get(session, f"https://stooq.com/q/d/l/?s={t.lower()}.us&i=d", tries=2)
         if r is None or "Date" not in r.text[:50]:
             continue
@@ -530,6 +710,68 @@ def macro(session):
 
 # --------------------------------------------------------------------------- main
 
+def build_universe(web, sec_rows, tick_map):
+    """One row per company (by SEC CIK), merging S&P index membership and Nasdaq listing."""
+    toks = universe_parts()
+    parts = get_index_lists(web, toks)
+    if "nasdaq" in toks:
+        nd = nasdaq_list(sec_rows)
+        log(f"Nasdaq-listed companies: {len(nd)}")
+        parts.append(nd)
+    if not parts:
+        raise SystemExit("Could not load any list of companies to screen.")
+    uni = pd.concat(parts, ignore_index=True)
+
+    companies, skipped = {}, []
+    for row in uni.itertuples(index=False):
+        t = row.ticker
+        hit = tick_map.get(t) or tick_map.get(t.replace("-", ""))
+        if not hit:
+            skipped.append({"t": t, "why": "no SEC CIK for this ticker"})
+            continue
+        cik, title = hit
+        c = companies.get(cik)
+        if c is None:
+            companies[cik] = {"t": t, "cik": cik, "name": row.name or title, "gicsSector": row.sector,
+                              "gics": row.sub, "lists": [row.index]}
+        else:
+            if row.index not in c["lists"]:
+                c["lists"].append(row.index)
+            if not c["gicsSector"] and row.sector:  # prefer the S&P entry's details
+                c.update(t=t, name=row.name or c["name"], gicsSector=row.sector, gics=row.sub)
+    return companies, skipped
+
+
+_local = threading.local()
+
+
+def screen_one(c, sic_cache):
+    sec = getattr(_local, "sec", None)
+    if sec is None:
+        sec = _local.sec = make_session(f"Rule1Screener {SEC_CONTACT}")
+    cik = c["cik"]
+    r = get(sec, f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json", timeout=60,
+            limiter=SEC_LIMIT)
+    if r is None:
+        return None, "SEC data not available"
+    try:
+        res, why = analyse(r.json().get("facts", {}))
+    except Exception as e:  # noqa: BLE001
+        return None, f"could not parse ({type(e).__name__})"
+    if res is None:
+        return None, why
+    sic, desc = get_sic(sec, cik, sic_cache)
+    if sic == 6770:
+        return None, "blank-cheque company (SPAC)"
+    res.update({
+        "t": c["t"], "name": c["name"], "cik": cik, "watch": c.get("watch", False),
+        "sector": c["gicsSector"] or sic_sector(sic),
+        "sub": clean_sic(desc), "sic": sic, "gics": c["gics"] or None,
+        "lists": c["lists"], "index": " · ".join(c["lists"]),
+    })
+    return res, None
+
+
 def main():
     if "@" not in SEC_CONTACT:
         raise SystemExit("SEC_CONTACT is missing. Add your email as a repository secret named SEC_CONTACT "
@@ -538,52 +780,51 @@ def main():
     web = make_session("Mozilla/5.0 (Rule1Screener; personal research)")
 
     log(f"Universe: {UNIVERSE}")
-    uni = get_universe(web)
-    tick_map = sec_ticker_map(sec)
+    tick_map, sec_rows = sec_ticker_map(sec)
+    uni, skipped = build_universe(web, sec_rows, tick_map)
 
     watch = read_watchlist()
-    have = set(uni["ticker"])
-    extra = [t for t in watch if t not in have]
-    if extra:
-        uni = pd.concat([uni, pd.DataFrame({
-            "ticker": extra, "name": "", "sector": "Watchlist", "sub": "Watchlist", "index": "Watchlist"})],
-            ignore_index=True)
-    watch_set = set(watch)
-    log(f"{len(uni)} companies to screen")
-
-    companies, skipped = [], []
-    for i, row in uni.iterrows():
-        t = row["ticker"]
+    for t in watch:
         hit = tick_map.get(t) or tick_map.get(t.replace("-", ""))
         if not hit:
-            skipped.append({"t": t, "why": "no SEC CIK for this ticker"})
+            skipped.append({"t": t, "why": "watchlist ticker has no SEC CIK"})
             continue
-        cik, title = hit
-        r = get(sec, f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json", timeout=60)
-        time.sleep(SEC_DELAY)
-        if r is None:
-            skipped.append({"t": t, "why": "SEC data not available"})
-            continue
-        try:
-            res, why = analyse(r.json().get("facts", {}))
-        except Exception as e:  # noqa: BLE001
-            res, why = None, f"could not parse ({type(e).__name__})"
-        if res is None:
-            skipped.append({"t": t, "why": why})
-            continue
-        res.update({
-            "t": t, "name": row["name"] or title, "sector": row["sector"], "sub": row["sub"],
-            "index": row["index"], "cik": cik, "watch": t in watch_set,
-        })
-        companies.append(res)
-        if (i + 1) % 50 == 0:
-            log(f"  {i + 1}/{len(uni)} done")
+        c = uni.setdefault(hit[0], {"t": t, "cik": hit[0], "name": hit[1], "gicsSector": "",
+                                    "gics": "", "lists": []})
+        c["watch"] = True
+        if "Watchlist" not in c["lists"]:
+            c["lists"].append("Watchlist")
+    log(f"{len(uni)} companies to screen")
 
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    sic_path = os.path.join(CACHE_DIR, "sic.json")
+    sic_cache = load_json(sic_path, {})
+
+    companies = []
+    t0 = time.time()
+    with ThreadPoolExecutor(max_workers=SEC_WORKERS) as pool:
+        futs = {pool.submit(screen_one, c, sic_cache): c for c in uni.values()}
+        for n, fut in enumerate(as_completed(futs), 1):
+            c = futs[fut]
+            try:
+                res, why = fut.result()
+            except Exception as e:  # noqa: BLE001
+                res, why = None, f"error ({type(e).__name__})"
+            if res is None:
+                skipped.append({"t": c["t"], "why": why})
+            else:
+                companies.append(res)
+            if n % 250 == 0:
+                log(f"  {n}/{len(uni)} done ({time.time() - t0:.0f}s)")
+
+    with open(sic_path, "w") as f:
+        json.dump(sic_cache, f)
     log(f"Analysed {len(companies)}, skipped {len(skipped)}")
 
     tickers = [c["t"] for c in companies]
     px = prices_yahoo(tickers)
-    missing = [t for t in tickers if t not in px]
+    best_first = sorted(companies, key=lambda c: -c["big5"])
+    missing = [c["t"] for c in best_first if c["t"] not in px]
     if missing:
         log(f"Yahoo missing {len(missing)} prices, trying Stooq")
         px.update(prices_stooq(web, missing))

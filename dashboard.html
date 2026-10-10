@@ -173,9 +173,10 @@ details.how li{margin:4px 0}
 
   <div class="card panel" id="compPanel">
     <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
-      <div><b>Circle of competence</b><div class="hint">Tick the industries you understand well enough to own the whole business. Saved in this browser.</div></div>
+      <div><b>Circle of competence</b><div class="hint">Tick the industries you understand well enough to own the whole business. Industries use the SEC's classification, grouped by sector. Saved in this browser.</div></div>
       <div style="display:flex;gap:8px"><button class="pill" id="compClear">Clear all</button><button class="pill on" id="compDone">Done</button></div>
     </div>
+    <input class="search" id="compQ" type="search" placeholder="Find an industry (e.g. software, furniture, medical)" style="width:100%;margin-bottom:14px">
     <div class="comp-grid" id="compGrid"></div>
   </div>
 
@@ -212,6 +213,17 @@ details.how li{margin:4px 0}
       <option value="90">Big Five ≥ 90</option>
     </select>
     <select class="pill" id="fSector" aria-label="Sector"><option value="">All sectors</option></select>
+    <select class="pill" id="fList" aria-label="Listing">
+      <option value="">All listings</option>
+      <option value="S&amp;P 500">S&amp;P 500</option>
+      <option value="Nasdaq">Nasdaq-listed</option>
+    </select>
+    <select class="pill" id="fSize" aria-label="Company size">
+      <option value="0">Any size</option>
+      <option value="300000000">Mkt cap ≥ $300M</option>
+      <option value="2000000000">Mkt cap ≥ $2B</option>
+      <option value="10000000000">Mkt cap ≥ $10B</option>
+    </select>
   </div>
 
   <div class="card tablewrap">
@@ -228,6 +240,8 @@ details.how li{margin:4px 0}
     <div class="body">
       <ul>
         <li><b>Data:</b> annual financials from SEC EDGAR filings (10-K), daily prices from Yahoo Finance (Stooq as backup), macro series from FRED. Refreshed each weekday after the US close.</li>
+        <li><b>Companies:</b> the S&amp;P 500 plus every Nasdaq-listed company that files annual reports with the SEC. Blank-cheque companies (SPACs), funds and companies without a recent 10-K are left out. Market cap = today's price × diluted shares from the latest annual report.</li>
+        <li><b>Industries:</b> the SEC's industry classification (SIC) for every company, so the picker uses one consistent list. Sectors are the S&amp;P (GICS) sector where known, otherwise the closest match.</li>
         <li><b>Big Five score (0–100):</b> for ROIC, sales, EPS, equity (book value per share where possible) and free cash flow, the 10-, 5- and 1-year rates are scored: ≥10% scores full marks, 5–10% half. Weights 40/40/20 for 10y/5y/1y, averaged across the five. A green dot means that metric cleared 10% over both 10 and 5 years.</li>
         <li><b>ROIC</b> = after-tax operating income ÷ (equity + long-term debt). <b>Free cash flow</b> = operating cash flow − capital expenditure.</li>
         <li><b>Debt test:</b> years of current free cash flow needed to repay long-term debt. Town wants 3 or fewer.</li>
@@ -255,10 +269,10 @@ details.how li{margin:4px 0}
   const DEFAULTS = { marr: 15, mos: 50, cap: 15, pe: 40, basis: 'min' };
   let A = Object.assign({}, DEFAULTS, LS.get('assump', {}));
   let comp = new Set(LS.get('comp', []));
-  let F = Object.assign({ comp: false, watch: false, below: false, min: 80, sector: '', q: '' }, LS.get('filters', {}));
+  let F = Object.assign({ comp: false, watch: false, below: false, min: 80, sector: '', list: '', size: 0, q: '' }, LS.get('filters', {}));
   F.q = '';
   let sortKey = LS.get('sort', 'prio'), sortDir = LS.get('sortDir', -1);
-  let DATA = null, ROWS = [], shown = 60;
+  let DATA = null, ROWS = [], shown = 60, IND = {}, compQ = '';
 
   const theme = LS.get('theme', null);
   if (theme) document.documentElement.dataset.theme = theme;
@@ -341,13 +355,15 @@ details.how li{margin:4px 0}
   function compute() {
     ROWS = DATA.companies.map(c => {
       const v = value(c);
-      return { c, v, prio: priority(c, v), inComp: comp.has(c.sector + '|' + c.sub) };
+      const mcap = c.px?.price && c.shares ? c.px.price * c.shares : null;
+      return { c, v, mcap, prio: priority(c, v), inComp: comp.has(c.sub) };
     });
   }
   const COLS = [
     { k: 'rank', label: '#', n: true, sort: null },
     { k: 't', label: 'Company', sort: r => r.c.t },
     { k: 'sub', label: 'Industry', cls: 'hide-sm', sort: r => r.c.sub },
+    { k: 'mcap', label: 'Mkt cap', n: true, cls: 'hide-sm', sort: r => r.mcap ?? -1 },
     { k: 'big5', label: 'Big Five', sort: r => r.c.big5 },
     { k: 'debt', label: 'Debt', cls: 'hide-sm', sort: r => r.c.debtYears ?? 50 },
     { k: 'price', label: 'Price', n: true, sort: r => r.c.px?.price ?? -1 },
@@ -366,6 +382,8 @@ details.how li{margin:4px 0}
       if (F.below && !(r.v.ratio != null && r.v.ratio <= 1)) return false;
       if (c.big5 < F.min) return false;
       if (F.sector && c.sector !== F.sector) return false;
+      if (F.list && !(c.lists || [c.index]).includes(F.list)) return false;
+      if (F.size && !(r.mcap >= F.size)) return false;
       return true;
     });
   }
@@ -383,6 +401,7 @@ details.how li{margin:4px 0}
         <td class="n hint">${i + 1}</td>
         <td><div class="tick">${esc(c.t)} ${c.watch ? '<span class="star" title="Watchlist">★</span>' : ''}</div><div class="cname">${esc(c.name)}</div></td>
         <td class="hide-sm"><div class="ind" title="${esc(c.sub)}">${esc(c.sub)}</div></td>
+        <td class="n hide-sm">${big(r.mcap)}</td>
         <td><div class="scorebar"><div class="track"><div class="fill" style="width:${c.big5}%"></div></div><span class="num">${Math.round(c.big5)}</span> ${passDots(c)}</div></td>
         <td class="hide-sm">${debtBadge(c.debtYears)}</td>
         <td class="n">${money(c.px?.price)}</td>
@@ -405,7 +424,7 @@ details.how li{margin:4px 0}
       [comp.size ? 'In your industries' : 'In your industries (none picked)', comp.size ? inC.length : '—'],
       ['Big Five ≥ 80' + (comp.size ? ' (yours)' : ''), strong.length],
       ['…and below MOS price', below.length],
-    ].map(([k, v]) => `<div class="card stat"><div class="k">${k}</div><div class="v num">${v}</div></div>`).join('');
+    ].map(([k, v]) => `<div class="card stat"><div class="k">${k}</div><div class="v num">${v.toLocaleString()}</div></div>`).join('');
 
     // pills
     $('#fComp').classList.toggle('on', F.comp);
@@ -413,6 +432,8 @@ details.how li{margin:4px 0}
     $('#fBelow').classList.toggle('on', F.below);
     $('#fMin').value = String(F.min);
     $('#fSector').value = F.sector;
+    $('#fList').value = F.list;
+    $('#fSize').value = String(F.size);
     $('#compCount').textContent = comp.size ? `(${comp.size})` : '';
     $('#compBanner').innerHTML = comp.size ? '' :
       `<div class="banner"><span>Pick the industries you understand to narrow the funnel to your circle of competence.</span><button class="pill" id="bannerPick">Choose industries</button></div>`;
@@ -421,27 +442,42 @@ details.how li{margin:4px 0}
   }
 
   // ------------------------------------------------------------ competence panel
-  function buildComp() {
-    const map = {};
+  // Each industry belongs to the sector most of its companies are in, so it appears once.
+  function industryMap() {
+    const votes = {};
     DATA.companies.forEach(c => {
-      if (c.sector === 'Watchlist') return;
-      (map[c.sector] ||= {}); map[c.sector][c.sub] = (map[c.sector][c.sub] || 0) + 1;
+      if (!c.sub || c.sector === 'Watchlist') return;
+      const v = (votes[c.sub] ||= { n: 0, s: {} });
+      v.n++; v.s[c.sector] = (v.s[c.sector] || 0) + 1;
     });
-    const sectors = Object.keys(map).sort();
-    $('#fSector').innerHTML = '<option value="">All sectors</option>' + sectors.map(s => `<option>${esc(s)}</option>`).join('');
+    IND = {};
+    for (const [ind, v] of Object.entries(votes))
+      IND[ind] = { n: v.n, sector: Object.entries(v.s).sort((a, b) => b[1] - a[1])[0][0] };
+  }
+  function buildComp() {
+    const bySector = {};
+    for (const [ind, v] of Object.entries(IND)) (bySector[v.sector] ||= []).push(ind);
+    const sectors = Object.keys(bySector).sort();
+    const allSectors = [...new Set(DATA.companies.map(c => c.sector).filter(Boolean))].sort();
+    $('#fSector').innerHTML = '<option value="">All sectors</option>' + allSectors.map(s => `<option>${esc(s)}</option>`).join('');
+    const q = compQ.trim().toLowerCase();
     $('#compGrid').innerHTML = sectors.map(s => {
-      const subs = Object.keys(map[s]).sort();
-      const all = subs.every(x => comp.has(s + '|' + x)), some = subs.some(x => comp.has(s + '|' + x));
+      const inds = bySector[s].sort();
+      const shownInds = q ? inds.filter(x => x.toLowerCase().includes(q) || s.toLowerCase().includes(q)) : inds;
+      if (!shownInds.length) return '';
+      const all = inds.every(x => comp.has(x)), some = inds.some(x => comp.has(x));
       return `<div class="sector"><label><input type="checkbox" data-sector="${esc(s)}" ${all ? 'checked' : ''} ${!all && some ? 'data-ind="1"' : ''}> ${esc(s)}</label>
-        <div class="subs">${subs.map(x => `<label><input type="checkbox" data-key="${esc(s + '|' + x)}" ${comp.has(s + '|' + x) ? 'checked' : ''}> ${esc(x)} <span class="cnt">${map[s][x]}</span></label>`).join('')}</div></div>`;
-    }).join('');
+        <div class="subs">${shownInds.map(x => `<label><input type="checkbox" data-key="${esc(x)}" data-parent="${esc(s)}" ${comp.has(x) ? 'checked' : ''}> ${esc(x)} <span class="cnt">${IND[x].n}</span></label>`).join('')}</div></div>`;
+    }).join('') || '<div class="hint">No industries match.</div>';
     document.querySelectorAll('#compGrid input[data-ind]').forEach(i => i.indeterminate = true);
   }
+  $('#compQ').addEventListener('input', e => { compQ = e.target.value; buildComp(); });
   $('#compGrid').addEventListener('change', e => {
     const t = e.target;
     if (t.dataset.sector) {
-      document.querySelectorAll(`#compGrid input[data-key^="${CSS.escape(t.dataset.sector)}|"]`).forEach(i => {
-        i.checked = t.checked; t.checked ? comp.add(i.dataset.key) : comp.delete(i.dataset.key);
+      // only the industries currently shown (respects the search box)
+      document.querySelectorAll('#compGrid input[data-parent]').forEach(i => {
+        if (i.dataset.parent === t.dataset.sector) t.checked ? comp.add(i.dataset.key) : comp.delete(i.dataset.key);
       });
     } else if (t.dataset.key) {
       t.checked ? comp.add(t.dataset.key) : comp.delete(t.dataset.key);
@@ -480,6 +516,8 @@ details.how li{margin:4px 0}
   $('#fBelow').onclick = () => { F.below = !F.below; render(); };
   $('#fMin').onchange = e => { F.min = +e.target.value; render(); };
   $('#fSector').onchange = e => { F.sector = e.target.value; render(); };
+  $('#fList').onchange = e => { F.list = e.target.value; render(); };
+  $('#fSize').onchange = e => { F.size = +e.target.value; render(); };
   $('#thead').addEventListener('click', e => {
     const th = e.target.closest('th'); if (!th) return;
     const col = COLS.find(c => c.k === th.dataset.k); if (!col?.sort) return;
@@ -583,7 +621,7 @@ details.how li{margin:4px 0}
     const prompt = `Research ${c.name} (${c.t}) using Phil Town's Rule #1 "Four Ms". It scores ${Math.round(c.big5)}/100 on my Big Five screen (ROIC 10y avg ${pct(c.g.roic['10'])}, sales growth 10y ${pct(c.g.rev['10'])}, EPS growth 10y ${pct(c.g.eps['10'])}, equity growth 10y ${pct(c.g.eq['10'])}, FCF growth 10y ${pct(c.g.fcf['10'])}). Please cover: 1) Meaning — what the business does and how it makes money; 2) Moat — which of Town's five moat types it has (brand, secret, toll bridge, switching cost, price) and how durable it is; 3) Management — CEO tenure, insider ownership and recent insider buying/selling, pay structure, capital allocation, candour in shareholder letters, any red flags; 4) Margin of safety — sanity-check my Sticker Price of ${money(v.sticker)} (growth ${pct(v.g)}, future P/E ${v.pe?.toFixed(1) ?? '—'}) against analyst growth estimates. Also list the main business, industry and macro risks. Cite sources.`;
     $('#dinner').innerHTML = `
       <div class="dhead"><div><h2>${esc(c.t)} ${c.watch ? '<span class="star">★</span>' : ''}</h2>
-        <div class="sub">${esc(c.name)} · ${esc(c.sub)} · ${esc(c.index)}</div></div>
+        <div class="sub">${esc(c.name)} · ${esc(c.sub)}${c.gics ? ' · ' + esc(c.gics) : ''} · ${esc(c.index)}${r.mcap ? ' · ' + big(r.mcap) + ' market cap' : ''}</div></div>
         <button class="close" id="dclose" aria-label="Close">✕</button></div>
       <div class="stats" style="margin-top:14px">
         <div class="card stat"><div class="k">Big Five</div><div class="v num">${Math.round(c.big5)}</div></div>
@@ -644,7 +682,11 @@ details.how li{margin:4px 0}
   fetch('data.json', { cache: 'no-cache' }).then(r => r.json()).then(d => {
     DATA = d;
     const gen = new Date(d.generated);
-    $('#meta').textContent = `${d.companies.length} US companies · ${d.universe === 'sp1500' ? 'S&P 1500' : 'S&P 500'} + watchlist · updated ${gen.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`;
+    const U = { sp500: 'S&P 500', sp400: 'S&P 400', sp600: 'S&P 600', sp1500: 'S&P 1500', nasdaq: 'Nasdaq' };
+    const ulabel = String(d.universe || 'sp500').split(',').map(x => U[x.trim()] || x).join(' + ');
+    $('#meta').textContent = `${d.companies.length.toLocaleString()} US companies · ${ulabel} + watchlist · updated ${gen.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`;
+    industryMap();
+    comp = new Set([...comp].filter(x => IND[x])); LS.set('comp', [...comp]);
     $('#skippedNote').textContent = d.skipped?.length ? `${d.skipped.length} companies were skipped this run (no SEC data or no recent annual report).` : '';
     syncAssump(); buildComp(); renderMacro(); compute(); render();
     if (location.hash) openDrawer(decodeURIComponent(location.hash.slice(1)));
