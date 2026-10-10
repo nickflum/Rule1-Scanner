@@ -1,0 +1,657 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rule #1 Screener</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+:root{
+  color-scheme:light;
+  --bg:#f6f5f2; --surface:#fcfcfb; --surface-2:#f0efec; --line:#e3e1dc;
+  --text:#121211; --text-2:#52514e; --muted:#85837d;
+  --accent:#2a78d6; --accent-soft:#e3eefb;
+  --good:#0a8a0a; --good-soft:#e2f3e2; --warn:#b97a00; --warn-soft:#fbf0d6;
+  --bad:#c53030; --bad-soft:#f9e3e3; --bar:#2a78d6; --bar-neg:#d03b3b;
+  --shadow:0 1px 2px rgba(0,0,0,.04),0 4px 16px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#121211; --surface:#1a1a19; --surface-2:#232321; --line:#2f2f2c;
+    --text:#f4f3ef; --text-2:#c3c2b7; --muted:#8d8b84;
+    --accent:#5598e7; --accent-soft:#1c2b3f;
+    --good:#3fbf3f; --good-soft:#163016; --warn:#f0b429; --warn-soft:#3a2e10;
+    --bad:#ef6b6b; --bad-soft:#3d1a1a; --bar:#3987e5; --bar-neg:#e66767;
+    --shadow:none;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#121211; --surface:#1a1a19; --surface-2:#232321; --line:#2f2f2c;
+  --text:#f4f3ef; --text-2:#c3c2b7; --muted:#8d8b84;
+  --accent:#5598e7; --accent-soft:#1c2b3f;
+  --good:#3fbf3f; --good-soft:#163016; --warn:#f0b429; --warn-soft:#3a2e10;
+  --bad:#ef6b6b; --bad-soft:#3d1a1a; --bar:#3987e5; --bar-neg:#e66767;
+  --shadow:none;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--text);font:14px/1.45 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+.num,td.n,.mono{font-variant-numeric:tabular-nums}
+.mono{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12.5px}
+a{color:var(--accent)}
+button{font:inherit;color:inherit}
+.wrap{max-width:1280px;margin:0 auto;padding:24px 16px 64px}
+header.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:20px}
+h1{font-size:24px;letter-spacing:-.02em;margin:0}
+.sub{color:var(--text-2);font-size:13px}
+.pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:6px 12px;cursor:pointer;font-size:13px;white-space:nowrap}
+.pill:hover{border-color:var(--muted)}
+.pill.on{background:var(--accent-soft);border-color:var(--accent);color:var(--text)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
+.section-title{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600;margin:28px 0 10px}
+
+/* macro */
+.macro{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px}
+.mtile{padding:12px 14px}
+.mtile .lab{font-size:12px;color:var(--text-2);min-height:32px}
+.mtile .val{font-size:22px;font-weight:600;letter-spacing:-.01em}
+.mtile .chg{font-size:12px;color:var(--muted)}
+.mtile svg{display:block;width:100%;height:28px;margin-top:6px}
+
+/* stats */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.stat{padding:14px 16px}
+.stat .k{font-size:12px;color:var(--text-2)}
+.stat .v{font-size:28px;font-weight:600;letter-spacing:-.02em}
+
+/* controls */
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:14px 0}
+.search{flex:1 1 220px;min-width:180px;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:7px 14px;font:inherit;color:var(--text)}
+.search:focus{outline:2px solid var(--accent);outline-offset:1px}
+select.pill{appearance:none;padding-right:26px;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 14px) 50%,calc(100% - 9px) 50%;background-size:5px 5px;background-repeat:no-repeat}
+
+/* panels */
+.panel{padding:16px;margin-bottom:12px;display:none}
+.panel.open{display:block}
+.comp-grid{columns:3 260px;column-gap:24px}
+.sector{break-inside:avoid;margin-bottom:14px}
+.sector>label{font-weight:600;display:flex;gap:8px;align-items:center;cursor:pointer}
+.sector .subs{margin:4px 0 0 24px;display:grid;gap:2px}
+.sector .subs label{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--text-2);cursor:pointer}
+.sector .cnt{color:var(--muted);font-weight:400;font-size:12px}
+.assump{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px}
+.assump label{display:grid;gap:4px;font-size:13px;color:var(--text-2)}
+.assump input,.assump select{font:inherit;color:var(--text);background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+.hint{font-size:12px;color:var(--muted)}
+.banner{padding:12px 16px;border-radius:10px;background:var(--accent-soft);margin:10px 0;font-size:13px;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+
+/* table */
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{position:sticky;top:0;background:var(--surface);text-align:left;font-weight:600;font-size:12px;color:var(--text-2);padding:10px 10px;border-bottom:1px solid var(--line);cursor:pointer;white-space:nowrap;user-select:none}
+th.n,td.n{text-align:right}
+th .arr{color:var(--muted);font-size:10px}
+td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+tbody tr{cursor:pointer}
+tbody tr:hover td{background:var(--surface-2)}
+.tick{font-weight:600}
+.cname{color:var(--text-2);font-size:12px;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ind{color:var(--text-2);font-size:12px;max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scorebar{display:flex;align-items:center;gap:8px}
+.scorebar .track{width:56px;height:6px;border-radius:3px;background:var(--surface-2);overflow:hidden}
+.scorebar .fill{height:100%;background:var(--bar);border-radius:3px}
+.dots{display:inline-flex;gap:3px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--surface-2);border:1px solid var(--line)}
+.dot.y{background:var(--good);border-color:var(--good)}
+.dot.n{background:transparent;border-color:var(--muted)}
+.badge{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:2px 8px;font-size:12px;font-weight:500;white-space:nowrap}
+.badge.good{background:var(--good-soft);color:var(--good)}
+.badge.warn{background:var(--warn-soft);color:var(--warn)}
+.badge.bad{background:var(--bad-soft);color:var(--bad)}
+.badge.neutral{background:var(--surface-2);color:var(--text-2)}
+.prio{font-weight:600}
+.star{color:var(--warn)}
+.empty{padding:40px;text-align:center;color:var(--text-2)}
+.more{display:flex;justify-content:center;padding:12px}
+
+/* drawer */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.35);opacity:0;pointer-events:none;transition:opacity .2s}
+.scrim.open{opacity:1;pointer-events:auto}
+.drawer{position:fixed;top:0;right:0;height:100%;width:min(720px,100%);background:var(--bg);border-left:1px solid var(--line);transform:translateX(100%);transition:transform .25s ease;overflow-y:auto;z-index:10}
+.drawer.open{transform:none}
+.drawer .inner{padding:20px 20px 60px}
+.dhead{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+.dhead h2{margin:0;font-size:22px;letter-spacing:-.01em}
+.close{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:4px 10px;cursor:pointer}
+.drawer .stats{grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
+.flags{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+.metrics{display:grid;grid-template-columns:1fr;gap:10px}
+.metric{padding:12px 14px;display:grid;grid-template-columns:150px 1fr;gap:14px;align-items:center}
+.metric .mname{font-weight:600;font-size:13px;display:flex;gap:6px;align-items:center}
+.metric .rates{display:flex;gap:10px;font-size:12px;color:var(--text-2);margin-top:4px;flex-wrap:wrap}
+.metric .rates b{color:var(--text);font-weight:600}
+.metric svg{width:100%;height:64px;display:block}
+.kv{display:grid;grid-template-columns:1fr auto;gap:6px 16px;font-size:13px}
+.kv .k{color:var(--text-2)}
+.kv .v{text-align:right;font-variant-numeric:tabular-nums}
+.kv .total{border-top:1px solid var(--line);padding-top:6px;font-weight:600}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.box{padding:14px 16px}
+.box h3{margin:0 0 10px;font-size:13px}
+.links{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.tip{position:fixed;pointer-events:none;background:var(--text);color:var(--bg);font-size:12px;padding:5px 8px;border-radius:6px;opacity:0;transition:opacity .1s;z-index:20;white-space:nowrap}
+details.how{margin-top:28px}
+details.how summary{cursor:pointer;font-weight:600}
+details.how .body{color:var(--text-2);font-size:13px;max-width:820px}
+details.how li{margin:4px 0}
+@media (max-width:720px){
+  .metric{grid-template-columns:1fr}
+  .two{grid-template-columns:1fr}
+  .hide-sm{display:none}
+  .macro{grid-template-columns:1fr 1fr}
+  .mtile .val{font-size:18px}
+  h1{font-size:20px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Rule #1 Screener</h1>
+      <div class="sub" id="meta">Loading data…</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="pill" id="btnComp">My industries <span id="compCount" class="hint"></span></button>
+      <button class="pill" id="btnAssump">Assumptions</button>
+      <button class="pill" id="btnTheme" title="Toggle light/dark">Theme</button>
+    </div>
+  </header>
+
+  <div class="card panel" id="compPanel">
+    <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+      <div><b>Circle of competence</b><div class="hint">Tick the industries you understand well enough to own the whole business. Saved in this browser.</div></div>
+      <div style="display:flex;gap:8px"><button class="pill" id="compClear">Clear all</button><button class="pill on" id="compDone">Done</button></div>
+    </div>
+    <div class="comp-grid" id="compGrid"></div>
+  </div>
+
+  <div class="card panel" id="assumpPanel">
+    <div style="margin-bottom:12px"><b>Sticker Price assumptions</b><div class="hint">Phil Town's defaults, set conservatively. Changes recalculate instantly and are saved in this browser.</div></div>
+    <div class="assump">
+      <label>Minimum acceptable return (MARR) %<input type="number" id="aMarr" min="5" max="30" step="0.5"><span class="hint">Town uses 15%</span></label>
+      <label>Margin of safety %<input type="number" id="aMos" min="0" max="80" step="5"><span class="hint">Buy at this % below Sticker Price. Town uses 50%</span></label>
+      <label>Growth rate cap %<input type="number" id="aCap" min="5" max="30" step="1"><span class="hint">Caps optimistic history</span></label>
+      <label>Maximum future P/E<input type="number" id="aPe" min="5" max="60" step="1"><span class="hint">Future P/E = 2 × growth rate, capped here</span></label>
+      <label>Growth rate based on<select id="aBasis"><option value="min">Lower of equity &amp; EPS growth</option><option value="eq">Equity growth only</option></select><span class="hint">Stands in for analyst estimates (not free)</span></label>
+    </div>
+    <div style="margin-top:12px"><button class="pill" id="aReset">Reset to Town's defaults</button></div>
+  </div>
+
+  <div class="section-title">Macro context <span style="text-transform:none;letter-spacing:0;font-weight:400">— background, not part of the ranking</span></div>
+  <div class="macro" id="macro"></div>
+
+  <div class="section-title">Funnel</div>
+  <div class="stats" id="stats"></div>
+
+  <div id="compBanner"></div>
+
+  <div class="controls">
+    <input class="search" id="q" type="search" placeholder="Search ticker, company or industry">
+    <button class="pill" id="fComp">In my industries</button>
+    <button class="pill" id="fWatch">Watchlist</button>
+    <button class="pill" id="fBelow">Below MOS price</button>
+    <select class="pill" id="fMin" aria-label="Minimum Big Five score">
+      <option value="0">Big Five: any</option>
+      <option value="50">Big Five ≥ 50</option>
+      <option value="70">Big Five ≥ 70</option>
+      <option value="80" selected>Big Five ≥ 80</option>
+      <option value="90">Big Five ≥ 90</option>
+    </select>
+    <select class="pill" id="fSector" aria-label="Sector"><option value="">All sectors</option></select>
+  </div>
+
+  <div class="card tablewrap">
+    <table>
+      <thead><tr id="thead"></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div id="empty"></div>
+    <div class="more" id="more"></div>
+  </div>
+
+  <details class="how">
+    <summary>How this works</summary>
+    <div class="body">
+      <ul>
+        <li><b>Data:</b> annual financials from SEC EDGAR filings (10-K), daily prices from Yahoo Finance (Stooq as backup), macro series from FRED. Refreshed each weekday after the US close.</li>
+        <li><b>Big Five score (0–100):</b> for ROIC, sales, EPS, equity (book value per share where possible) and free cash flow, the 10-, 5- and 1-year rates are scored: ≥10% scores full marks, 5–10% half. Weights 40/40/20 for 10y/5y/1y, averaged across the five. A green dot means that metric cleared 10% over both 10 and 5 years.</li>
+        <li><b>ROIC</b> = after-tax operating income ÷ (equity + long-term debt). <b>Free cash flow</b> = operating cash flow − capital expenditure.</li>
+        <li><b>Debt test:</b> years of current free cash flow needed to repay long-term debt. Town wants 3 or fewer.</li>
+        <li><b>Sticker Price:</b> latest EPS grown at the chosen growth rate for 10 years × future P/E (2 × growth rate, capped), discounted back at your MARR. MOS price = Sticker Price × (1 − margin of safety). Free data has no analyst forecasts, so historical growth is used and capped.</li>
+        <li><b>Priority score:</b> 60% Big Five quality + 40% valuation (100 at or below the MOS price, falling to 0 at the Sticker Price), minus 10 if debt takes more than 3 years to repay. Only meant to order your reading list.</li>
+        <li><b>Tools:</b> Town's timing signals — price above its 10-day average, MACD (8,17,9) above its signal line, stochastic (14,5) %K above %D. Green = "buy-side". These are short-term and noisy.</li>
+        <li><b>Limits:</b> XBRL data can be patchy (especially banks, insurers and REITs, whose statements don't fit the Big Five well). Always confirm numbers in the actual filings before acting. This is a research shortlist, not advice.</li>
+      </ul>
+      <div id="skippedNote" class="hint"></div>
+    </div>
+  </details>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true"><div class="inner" id="dinner"></div></aside>
+<div class="tip" id="tip"></div>
+
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  const LS = {
+    get(k, d){ try { const v = localStorage.getItem('r1.'+k); return v ? JSON.parse(v) : d; } catch { return d; } },
+    set(k, v){ try { localStorage.setItem('r1.'+k, JSON.stringify(v)); } catch {} }
+  };
+  const DEFAULTS = { marr: 15, mos: 50, cap: 15, pe: 40, basis: 'min' };
+  let A = Object.assign({}, DEFAULTS, LS.get('assump', {}));
+  let comp = new Set(LS.get('comp', []));
+  let F = Object.assign({ comp: false, watch: false, below: false, min: 80, sector: '', q: '' }, LS.get('filters', {}));
+  F.q = '';
+  let sortKey = LS.get('sort', 'prio'), sortDir = LS.get('sortDir', -1);
+  let DATA = null, ROWS = [], shown = 60;
+
+  const theme = LS.get('theme', null);
+  if (theme) document.documentElement.dataset.theme = theme;
+  $('#btnTheme').onclick = () => {
+    const cur = document.documentElement.dataset.theme ||
+      (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    const next = cur === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next; LS.set('theme', next);
+  };
+
+  // ------------------------------------------------------------ formatting
+  const pct = (v, d = 1) => v == null ? '—' : (v * 100).toFixed(d) + '%';
+  const money = v => v == null ? '—' : '$' + (Math.abs(v) >= 1000 ? v.toLocaleString(undefined, {maximumFractionDigits: 0}) : v.toFixed(2));
+  const big = v => {
+    if (v == null) return '—';
+    const a = Math.abs(v), s = v < 0 ? '−' : '';
+    if (a >= 1e12) return s + '$' + (a/1e12).toFixed(2) + 'T';
+    if (a >= 1e9) return s + '$' + (a/1e9).toFixed(2) + 'B';
+    if (a >= 1e6) return s + '$' + (a/1e6).toFixed(1) + 'M';
+    return s + '$' + a.toFixed(0);
+  };
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  // ------------------------------------------------------------ valuation
+  function value(c) {
+    const out = { g: null, pe: null, sticker: null, mos: null, ratio: null, futEps: null, futPrice: null, curPe: null };
+    const price = c.px?.price ?? null;
+    if (c.eps != null && c.eps > 0 && price) out.curPe = price / c.eps;
+    const pick = k => [c.g?.[k]?.['10'], c.g?.[k]?.['5']].filter(v => v != null);
+    let cands = pick('eq');
+    if (A.basis === 'min') cands = cands.concat(pick('eps'));
+    if (!cands.length || c.eps == null || c.eps <= 0) return out;
+    let g = Math.min(...cands);
+    g = Math.max(0, Math.min(g, A.cap / 100));
+    out.g = g;
+    let pe = Math.min(2 * g * 100, A.pe);
+    out.pe = pe;
+    out.futEps = c.eps * Math.pow(1 + g, 10);
+    out.futPrice = out.futEps * pe;
+    out.sticker = out.futPrice / Math.pow(1 + A.marr / 100, 10);
+    out.mos = out.sticker * (1 - A.mos / 100);
+    if (price && out.mos > 0) out.ratio = price / out.mos;
+    return out;
+  }
+  function priority(c, v) {
+    let vs = 0;
+    if (v.ratio != null && v.sticker > 0) {
+      const price = c.px.price;
+      if (price <= v.mos) vs = 100;
+      else if (price >= v.sticker) vs = 0;
+      else vs = 100 * (v.sticker - price) / (v.sticker - v.mos);
+    }
+    let p = 0.6 * c.big5 + 0.4 * vs;
+    if (c.debtYears != null && c.debtYears > 3) p -= 10;
+    return Math.max(0, Math.round(p));
+  }
+  function valBadge(c, v) {
+    if (!c.px) return '<span class="badge neutral">No price</span>';
+    if (v.sticker == null || v.sticker <= 0) return '<span class="badge neutral">No Sticker</span>';
+    const p = c.px.price;
+    if (p <= v.mos) return '<span class="badge good">✓ Below MOS</span>';
+    if (p <= v.sticker) return `<span class="badge warn">◐ ${Math.round((p / v.mos - 1) * 100)}% above MOS</span>`;
+    return `<span class="badge bad">✕ Above Sticker</span>`;
+  }
+  const debtBadge = d => d == null ? '<span class="badge neutral">n/a</span>'
+    : d <= 3 ? `<span class="badge good">${d.toFixed(1)} yrs</span>`
+    : d >= 99 ? '<span class="badge bad">No FCF</span>'
+    : `<span class="badge bad">${d.toFixed(1)} yrs</span>`;
+  const KEYS = [['roic','ROIC'],['rev','Sales'],['eps','EPS'],['eq','Equity'],['fcf','FCF']];
+  const passDots = c => '<span class="dots" aria-label="Big Five passes">' + KEYS.map(([k, n]) =>
+    `<span class="dot ${c.passes[k] ? 'y' : 'n'}" data-tip="${n}: ${c.passes[k] ? 'passes' : 'misses'} 10% over 10y & 5y"></span>`).join('') + '</span>';
+  const toolDots = px => {
+    if (!px) return '—';
+    const t = [['ma','10-day MA'],['macd','MACD'],['stoch','Stochastic']];
+    return '<span class="dots">' + t.map(([k, n]) =>
+      `<span class="dot ${px[k] ? 'y' : 'n'}" data-tip="${n}: ${px[k] ? 'buy-side' : 'sell-side'}"></span>`).join('') + '</span>';
+  };
+
+  // ------------------------------------------------------------ build rows
+  function compute() {
+    ROWS = DATA.companies.map(c => {
+      const v = value(c);
+      return { c, v, prio: priority(c, v), inComp: comp.has(c.sector + '|' + c.sub) };
+    });
+  }
+  const COLS = [
+    { k: 'rank', label: '#', n: true, sort: null },
+    { k: 't', label: 'Company', sort: r => r.c.t },
+    { k: 'sub', label: 'Industry', cls: 'hide-sm', sort: r => r.c.sub },
+    { k: 'big5', label: 'Big Five', sort: r => r.c.big5 },
+    { k: 'debt', label: 'Debt', cls: 'hide-sm', sort: r => r.c.debtYears ?? 50 },
+    { k: 'price', label: 'Price', n: true, sort: r => r.c.px?.price ?? -1 },
+    { k: 'mos', label: 'MOS price', n: true, sort: r => r.v.mos ?? -1 },
+    { k: 'val', label: 'Valuation', sort: r => r.v.ratio ?? 999 },
+    { k: 'tools', label: 'Tools', cls: 'hide-sm', sort: r => r.c.px ? (+r.c.px.ma + +r.c.px.macd + +!!r.c.px.stoch) : -1 },
+    { k: 'prio', label: 'Priority', n: true, sort: r => r.prio },
+  ];
+  function filtered() {
+    const q = F.q.trim().toLowerCase();
+    return ROWS.filter(r => {
+      const c = r.c;
+      if (q && !(c.t.toLowerCase().includes(q) || c.name.toLowerCase().includes(q) || c.sub.toLowerCase().includes(q))) return false;
+      if (F.comp && comp.size && !r.inComp && !c.watch) return false;
+      if (F.watch && !c.watch) return false;
+      if (F.below && !(r.v.ratio != null && r.v.ratio <= 1)) return false;
+      if (c.big5 < F.min) return false;
+      if (F.sector && c.sector !== F.sector) return false;
+      return true;
+    });
+  }
+  function render() {
+    const col = COLS.find(c => c.k === sortKey) || COLS[COLS.length - 1];
+    const list = filtered().sort((a, b) => {
+      const x = col.sort(a), y = col.sort(b);
+      return (x < y ? -1 : x > y ? 1 : 0) * sortDir;
+    });
+    $('#thead').innerHTML = COLS.map(c => `<th class="${c.n ? 'n' : ''} ${c.cls || ''}" data-k="${c.k}">${c.label}${
+      c.k === sortKey ? ` <span class="arr">${sortDir < 0 ? '▼' : '▲'}</span>` : ''}</th>`).join('');
+    $('#tbody').innerHTML = list.slice(0, shown).map((r, i) => {
+      const c = r.c;
+      return `<tr data-t="${esc(c.t)}">
+        <td class="n hint">${i + 1}</td>
+        <td><div class="tick">${esc(c.t)} ${c.watch ? '<span class="star" title="Watchlist">★</span>' : ''}</div><div class="cname">${esc(c.name)}</div></td>
+        <td class="hide-sm"><div class="ind" title="${esc(c.sub)}">${esc(c.sub)}</div></td>
+        <td><div class="scorebar"><div class="track"><div class="fill" style="width:${c.big5}%"></div></div><span class="num">${Math.round(c.big5)}</span> ${passDots(c)}</div></td>
+        <td class="hide-sm">${debtBadge(c.debtYears)}</td>
+        <td class="n">${money(c.px?.price)}</td>
+        <td class="n">${money(r.v.mos)}</td>
+        <td>${valBadge(c, r.v)}</td>
+        <td class="hide-sm">${toolDots(c.px)}</td>
+        <td class="n prio">${r.prio}</td>
+      </tr>`;
+    }).join('');
+    $('#empty').innerHTML = list.length ? '' : '<div class="empty">No companies match these filters. Try lowering the Big Five minimum or widening your industries.</div>';
+    $('#more').innerHTML = list.length > shown ? `<button class="pill" id="showMore">Show more (${list.length - shown} left)</button>` : '';
+    if (list.length > shown) $('#showMore').onclick = () => { shown += 60; render(); };
+
+    // stats
+    const all = ROWS, inC = comp.size ? ROWS.filter(r => r.inComp || r.c.watch) : ROWS;
+    const strong = inC.filter(r => r.c.big5 >= 80);
+    const below = strong.filter(r => r.v.ratio != null && r.v.ratio <= 1);
+    $('#stats').innerHTML = [
+      ['Companies screened', all.length],
+      [comp.size ? 'In your industries' : 'In your industries (none picked)', comp.size ? inC.length : '—'],
+      ['Big Five ≥ 80' + (comp.size ? ' (yours)' : ''), strong.length],
+      ['…and below MOS price', below.length],
+    ].map(([k, v]) => `<div class="card stat"><div class="k">${k}</div><div class="v num">${v}</div></div>`).join('');
+
+    // pills
+    $('#fComp').classList.toggle('on', F.comp);
+    $('#fWatch').classList.toggle('on', F.watch);
+    $('#fBelow').classList.toggle('on', F.below);
+    $('#fMin').value = String(F.min);
+    $('#fSector').value = F.sector;
+    $('#compCount').textContent = comp.size ? `(${comp.size})` : '';
+    $('#compBanner').innerHTML = comp.size ? '' :
+      `<div class="banner"><span>Pick the industries you understand to narrow the funnel to your circle of competence.</span><button class="pill" id="bannerPick">Choose industries</button></div>`;
+    if (!comp.size) $('#bannerPick').onclick = () => openPanel('comp');
+    LS.set('filters', Object.assign({}, F, { q: '' }));
+  }
+
+  // ------------------------------------------------------------ competence panel
+  function buildComp() {
+    const map = {};
+    DATA.companies.forEach(c => {
+      if (c.sector === 'Watchlist') return;
+      (map[c.sector] ||= {}); map[c.sector][c.sub] = (map[c.sector][c.sub] || 0) + 1;
+    });
+    const sectors = Object.keys(map).sort();
+    $('#fSector').innerHTML = '<option value="">All sectors</option>' + sectors.map(s => `<option>${esc(s)}</option>`).join('');
+    $('#compGrid').innerHTML = sectors.map(s => {
+      const subs = Object.keys(map[s]).sort();
+      const all = subs.every(x => comp.has(s + '|' + x)), some = subs.some(x => comp.has(s + '|' + x));
+      return `<div class="sector"><label><input type="checkbox" data-sector="${esc(s)}" ${all ? 'checked' : ''} ${!all && some ? 'data-ind="1"' : ''}> ${esc(s)}</label>
+        <div class="subs">${subs.map(x => `<label><input type="checkbox" data-key="${esc(s + '|' + x)}" ${comp.has(s + '|' + x) ? 'checked' : ''}> ${esc(x)} <span class="cnt">${map[s][x]}</span></label>`).join('')}</div></div>`;
+    }).join('');
+    document.querySelectorAll('#compGrid input[data-ind]').forEach(i => i.indeterminate = true);
+  }
+  $('#compGrid').addEventListener('change', e => {
+    const t = e.target;
+    if (t.dataset.sector) {
+      document.querySelectorAll(`#compGrid input[data-key^="${CSS.escape(t.dataset.sector)}|"]`).forEach(i => {
+        i.checked = t.checked; t.checked ? comp.add(i.dataset.key) : comp.delete(i.dataset.key);
+      });
+    } else if (t.dataset.key) {
+      t.checked ? comp.add(t.dataset.key) : comp.delete(t.dataset.key);
+    }
+    LS.set('comp', [...comp]);
+    if (comp.size) F.comp = true;
+    buildComp(); compute(); render();
+  });
+  $('#compClear').onclick = () => { comp.clear(); LS.set('comp', []); F.comp = false; buildComp(); compute(); render(); };
+  function openPanel(which) {
+    const p = which === 'comp' ? $('#compPanel') : $('#assumpPanel');
+    const o = which === 'comp' ? $('#assumpPanel') : $('#compPanel');
+    o.classList.remove('open'); p.classList.toggle('open');
+    if (p.classList.contains('open')) p.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+  $('#btnComp').onclick = () => openPanel('comp');
+  $('#compDone').onclick = () => $('#compPanel').classList.remove('open');
+  $('#btnAssump').onclick = () => openPanel('assump');
+
+  // ------------------------------------------------------------ assumptions
+  const AF = { aMarr: 'marr', aMos: 'mos', aCap: 'cap', aPe: 'pe', aBasis: 'basis' };
+  function syncAssump() { for (const [id, k] of Object.entries(AF)) $('#' + id).value = A[k]; }
+  for (const [id, k] of Object.entries(AF)) {
+    $('#' + id).addEventListener('input', e => {
+      const v = e.target.value;
+      A[k] = k === 'basis' ? v : (parseFloat(v) || DEFAULTS[k]);
+      LS.set('assump', A); compute(); render();
+    });
+  }
+  $('#aReset').onclick = () => { A = Object.assign({}, DEFAULTS); LS.set('assump', A); syncAssump(); compute(); render(); };
+
+  // ------------------------------------------------------------ filters & sorting
+  $('#q').addEventListener('input', e => { F.q = e.target.value; shown = 60; render(); });
+  $('#fComp').onclick = () => { if (!comp.size) { openPanel('comp'); return; } F.comp = !F.comp; render(); };
+  $('#fWatch').onclick = () => { F.watch = !F.watch; render(); };
+  $('#fBelow').onclick = () => { F.below = !F.below; render(); };
+  $('#fMin').onchange = e => { F.min = +e.target.value; render(); };
+  $('#fSector').onchange = e => { F.sector = e.target.value; render(); };
+  $('#thead').addEventListener('click', e => {
+    const th = e.target.closest('th'); if (!th) return;
+    const col = COLS.find(c => c.k === th.dataset.k); if (!col?.sort) return;
+    if (sortKey === col.k) sortDir *= -1; else { sortKey = col.k; sortDir = (col.k === 't' || col.k === 'sub' || col.k === 'val' || col.k === 'debt') ? 1 : -1; }
+    LS.set('sort', sortKey); LS.set('sortDir', sortDir); render();
+  });
+  $('#tbody').addEventListener('click', e => { const tr = e.target.closest('tr'); if (tr) openDrawer(tr.dataset.t); });
+
+  // ------------------------------------------------------------ tooltips
+  const tip = $('#tip');
+  document.addEventListener('mouseover', e => {
+    const el = e.target.closest('[data-tip]');
+    if (!el) { tip.style.opacity = 0; return; }
+    tip.textContent = el.dataset.tip; tip.style.opacity = 1;
+  });
+  document.addEventListener('mousemove', e => {
+    if (tip.style.opacity === '1') {
+      const w = tip.offsetWidth;
+      tip.style.left = Math.min(e.clientX + 12, innerWidth - w - 8) + 'px';
+      tip.style.top = (e.clientY + 14) + 'px';
+    }
+  });
+
+  // ------------------------------------------------------------ small charts
+  function spark(vals, w = 200, h = 28) {
+    const v = vals.filter(x => x != null);
+    if (v.length < 2) return '';
+    const mn = Math.min(...v), mx = Math.max(...v), r = (mx - mn) || 1;
+    const pts = vals.map((x, i) => x == null ? null : [(i / (vals.length - 1)) * (w - 4) + 2, h - 3 - ((x - mn) / r) * (h - 6)]).filter(Boolean);
+    const last = pts[pts.length - 1];
+    return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
+      <polyline points="${pts.map(p => p.join(',')).join(' ')}" fill="none" stroke="var(--bar)" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
+      <circle cx="${last[0]}" cy="${last[1]}" r="2.5" fill="var(--bar)"/></svg>`;
+  }
+  function bars(vals, years, fmt) {
+    const w = 440, h = 64, n = vals.length, gap = 2, bw = (w - gap * (n - 1)) / n;
+    const v = vals.filter(x => x != null);
+    if (!v.length) return '<div class="hint">No data reported</div>';
+    const mx = Math.max(0, ...v), mn = Math.min(0, ...v), r = (mx - mn) || 1;
+    const zero = h - 14 - ((0 - mn) / r) * (h - 18);
+    let s = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img">`;
+    s += `<line x1="0" x2="${w}" y1="${zero}" y2="${zero}" stroke="var(--line)" stroke-width="1"/>`;
+    vals.forEach((x, i) => {
+      const xx = i * (bw + gap);
+      if (x != null) {
+        const y = h - 14 - ((x - mn) / r) * (h - 18);
+        const top = Math.min(y, zero), hh = Math.max(1.5, Math.abs(zero - y));
+        s += `<rect x="${xx}" y="${top}" width="${bw}" height="${hh}" rx="2" fill="${x < 0 ? 'var(--bar-neg)' : 'var(--bar)'}" data-tip="FY${years[i]}: ${fmt(x)}"/>`;
+      } else {
+        s += `<rect x="${xx}" y="0" width="${bw}" height="${h - 14}" fill="transparent" data-tip="FY${years[i]}: not reported"/>`;
+      }
+      if (i === 0 || i === n - 1) s += `<text x="${xx + bw / 2}" y="${h - 2}" font-size="10" text-anchor="middle" fill="var(--muted)">${years[i]}</text>`;
+    });
+    return s + '</svg>';
+  }
+
+  // ------------------------------------------------------------ drawer
+  function openDrawer(t) {
+    const r = ROWS.find(x => x.c.t === t); if (!r) return;
+    const c = r.c, v = r.v, px = c.px;
+    const fmtFor = { rev: big, fcf: big, eps: x => '$' + x.toFixed(2), eq: x => c.eqBasis === 'total equity' ? big(x) : '$' + x.toFixed(2), roic: x => pct(x) };
+    const names = { roic: 'ROIC', rev: 'Sales growth', eps: 'EPS growth', eq: 'Equity growth', fcf: 'Free cash flow growth' };
+    const metric = k => {
+      const g = c.g[k], isR = k === 'roic';
+      const rate = (lab, x) => `<span>${lab} <b style="color:${x == null ? 'var(--muted)' : x >= .10 ? 'var(--good)' : x >= .05 ? 'var(--warn)' : 'var(--bad)'}">${pct(x)}</b></span>`;
+      return `<div class="card metric">
+        <div><div class="mname"><span class="dot ${c.passes[k] ? 'y' : 'n'}"></span>${names[k]}</div>
+          <div class="rates">${rate(isR ? '10y avg' : (g.span && g.span < 10 ? g.span + 'y' : '10y'), g['10'])}${rate(isR ? '5y avg' : '5y', g['5'])}${rate(isR ? 'Last yr' : '1y', g['1'])}</div>
+          ${g.consistency != null ? `<div class="hint" style="margin-top:4px">Grew in ${Math.round(g.consistency * 100)}% of years</div>` : ''}
+          ${k === 'eq' ? `<div class="hint">Based on ${esc(c.eqBasis)}</div>` : ''}</div>
+        <div>${bars(c.series[k], c.years, fmtFor[k])}</div></div>`;
+    };
+    const sticker = v.sticker != null ? `
+      <div class="kv">
+        <span class="k">Latest annual EPS (FY${c.fy})</span><span class="v">$${c.eps.toFixed(2)}</span>
+        <span class="k">Growth rate used</span><span class="v">${pct(v.g)}</span>
+        <span class="k">EPS in 10 years</span><span class="v">$${v.futEps.toFixed(2)}</span>
+        <span class="k">Future P/E</span><span class="v">${v.pe.toFixed(1)}</span>
+        <span class="k">Future price</span><span class="v">${money(v.futPrice)}</span>
+        <span class="k">Discounted at ${A.marr}% for 10 yrs</span><span class="v">÷ ${Math.pow(1 + A.marr / 100, 10).toFixed(2)}</span>
+        <span class="k total">Sticker Price</span><span class="v total">${money(v.sticker)}</span>
+        <span class="k total">MOS price (${A.mos}% off)</span><span class="v total">${money(v.mos)}</span>
+        <span class="k">Today's price</span><span class="v">${money(px?.price)} ${px ? `<span class="hint">${px.date}</span>` : ''}</span>
+        <span class="k">Today's P/E</span><span class="v">${v.curPe ? v.curPe.toFixed(1) : '—'}</span>
+      </div><div style="margin-top:10px">${valBadge(c, v)}</div>`
+      : `<div class="hint">No Sticker Price: ${c.eps == null || c.eps <= 0 ? 'EPS is zero or negative.' : 'not enough growth history.'}</div>`;
+    const sh = c.sharesChg5;
+    const mgmt = `<div class="kv">
+        <span class="k">Debt payoff from FCF</span><span class="v">${debtBadge(c.debtYears)}</span>
+        <span class="k">Long-term debt</span><span class="v">${big(c.ltDebt)}</span>
+        <span class="k">Share count, 5 years</span><span class="v">${sh == null ? '—' : sh <= -0.02 ? `<span class="badge good">${pct(sh)} buybacks</span>` : sh >= 0.05 ? `<span class="badge bad">+${pct(sh)} dilution</span>` : `<span class="badge neutral">${sh > 0 ? '+' : ''}${pct(sh)} flat</span>`}</span>
+        <span class="k">ROIC trend (5y avg → last yr)</span><span class="v">${pct(c.g.roic['5'])} → ${pct(c.g.roic['1'])}</span>
+      </div><div class="hint" style="margin-top:8px">Numbers can't judge honesty or owner-mindedness. Use the research prompt below for the Four Ms.</div>`;
+    const tools = px ? `<div>${spark(px.spark, 300, 48)}</div>
+      <div class="kv" style="margin-top:8px">
+        <span class="k">Price vs 10-day average</span><span class="v">${px.ma ? '<span class="badge good">↑ above</span>' : '<span class="badge bad">↓ below</span>'}</span>
+        <span class="k">MACD (8,17,9)</span><span class="v">${px.macd ? '<span class="badge good">↑ buy-side</span>' : '<span class="badge bad">↓ sell-side</span>'}</span>
+        <span class="k">Stochastic (14,5)</span><span class="v">${px.stoch == null ? '—' : px.stoch ? '<span class="badge good">↑ buy-side</span>' : '<span class="badge bad">↓ sell-side</span>'}</span>
+        <span class="k">1-year price change</span><span class="v">${pct(px.chg1y)}</span>
+      </div>` : '<div class="hint">No price data today.</div>';
+    const prompt = `Research ${c.name} (${c.t}) using Phil Town's Rule #1 "Four Ms". It scores ${Math.round(c.big5)}/100 on my Big Five screen (ROIC 10y avg ${pct(c.g.roic['10'])}, sales growth 10y ${pct(c.g.rev['10'])}, EPS growth 10y ${pct(c.g.eps['10'])}, equity growth 10y ${pct(c.g.eq['10'])}, FCF growth 10y ${pct(c.g.fcf['10'])}). Please cover: 1) Meaning — what the business does and how it makes money; 2) Moat — which of Town's five moat types it has (brand, secret, toll bridge, switching cost, price) and how durable it is; 3) Management — CEO tenure, insider ownership and recent insider buying/selling, pay structure, capital allocation, candour in shareholder letters, any red flags; 4) Margin of safety — sanity-check my Sticker Price of ${money(v.sticker)} (growth ${pct(v.g)}, future P/E ${v.pe?.toFixed(1) ?? '—'}) against analyst growth estimates. Also list the main business, industry and macro risks. Cite sources.`;
+    $('#dinner').innerHTML = `
+      <div class="dhead"><div><h2>${esc(c.t)} ${c.watch ? '<span class="star">★</span>' : ''}</h2>
+        <div class="sub">${esc(c.name)} · ${esc(c.sub)} · ${esc(c.index)}</div></div>
+        <button class="close" id="dclose" aria-label="Close">✕</button></div>
+      <div class="stats" style="margin-top:14px">
+        <div class="card stat"><div class="k">Big Five</div><div class="v num">${Math.round(c.big5)}</div></div>
+        <div class="card stat"><div class="k">Priority</div><div class="v num">${r.prio}</div></div>
+        <div class="card stat"><div class="k">MOS price</div><div class="v num">${money(v.mos)}</div></div>
+        <div class="card stat"><div class="k">Price</div><div class="v num">${money(px?.price)}</div></div>
+      </div>
+      ${c.flags.length ? `<div class="flags">${c.flags.map(f => `<span class="badge warn" style="white-space:normal">⚠ ${esc(f)}</span>`).join('')}</div>` : ''}
+      <div class="section-title">The Big Five · FY${c.years[0]}–FY${c.fy}</div>
+      <div class="metrics">${['roic','rev','eps','eq','fcf'].map(metric).join('')}</div>
+      <div class="section-title">Valuation & management signals</div>
+      <div class="two">
+        <div class="card box"><h3>Sticker Price</h3>${sticker}</div>
+        <div class="card box"><h3>Debt & management signals</h3>${mgmt}</div>
+      </div>
+      <div class="section-title">Town's timing tools · last 6 months</div>
+      <div class="card box">${tools}</div>
+      <div class="section-title">Dig deeper</div>
+      <div class="card box">
+        <div class="hint">Copy this and paste it into Claude to research management, moat and risks.</div>
+        <div class="links">
+          <button class="pill on" id="copyPrompt">Copy Four Ms research prompt</button>
+          <a class="pill" target="_blank" rel="noopener" href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${c.cik}&type=10-K">10-K filings ↗</a>
+          <a class="pill" target="_blank" rel="noopener" href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${c.cik}&type=4">Insider trades (Form 4) ↗</a>
+          <a class="pill" target="_blank" rel="noopener" href="https://finance.yahoo.com/quote/${encodeURIComponent(c.t)}">Yahoo Finance ↗</a>
+        </div>
+      </div>`;
+    $('#dclose').onclick = closeDrawer;
+    $('#copyPrompt').onclick = async e => {
+      try { await navigator.clipboard.writeText(prompt); e.target.textContent = 'Copied ✓'; }
+      catch { window.prompt('Copy this prompt:', prompt); }
+    };
+    $('#drawer').classList.add('open'); $('#scrim').classList.add('open');
+    $('#drawer').setAttribute('aria-hidden', 'false'); $('#drawer').scrollTop = 0;
+    history.replaceState(null, '', '#' + encodeURIComponent(c.t));
+  }
+  function closeDrawer() {
+    $('#drawer').classList.remove('open'); $('#scrim').classList.remove('open');
+    $('#drawer').setAttribute('aria-hidden', 'true');
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+  $('#scrim').onclick = closeDrawer;
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+
+  // ------------------------------------------------------------ macro
+  function renderMacro() {
+    const fmt = (id, v) => v == null ? '—' : v.toFixed(2) + (['T10Y2Y', 'BAMLH0A0HYM2'].includes(id) ? '' : '%');
+    $('#macro').innerHTML = (DATA.macro || []).map(m => {
+      const d = m.yearAgo != null ? m.value - m.yearAgo : null;
+      return `<div class="card mtile"><div class="lab">${esc(m.label)}</div>
+        <div class="val num">${fmt(m.id, m.value)}</div>
+        <div class="chg" title="Latest reading ${m.date}">${d == null ? m.date : (d >= 0 ? '▲ ' : '▼ ') + Math.abs(d).toFixed(2) + ' vs 1 yr ago'}</div>
+        ${spark(m.hist)}</div>`;
+    }).join('') || '<div class="hint">Macro data unavailable today.</div>';
+  }
+
+  // ------------------------------------------------------------ load
+  fetch('data.json', { cache: 'no-cache' }).then(r => r.json()).then(d => {
+    DATA = d;
+    const gen = new Date(d.generated);
+    $('#meta').textContent = `${d.companies.length} US companies · ${d.universe === 'sp1500' ? 'S&P 1500' : 'S&P 500'} + watchlist · updated ${gen.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`;
+    $('#skippedNote').textContent = d.skipped?.length ? `${d.skipped.length} companies were skipped this run (no SEC data or no recent annual report).` : '';
+    syncAssump(); buildComp(); renderMacro(); compute(); render();
+    if (location.hash) openDrawer(decodeURIComponent(location.hash.slice(1)));
+  }).catch(() => {
+    $('#meta').textContent = 'Could not load data.json — the first daily run may not have finished yet.';
+  });
+})();
+</script>
+</body>
+</html>

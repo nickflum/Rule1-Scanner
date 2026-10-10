@@ -1,0 +1,4 @@
+# Extra US tickers to screen and star on the dashboard, one per line.
+# Companies already in the S&P 500 just get a star; others are added to the screen.
+# Anything after a # is ignored.
+COST
