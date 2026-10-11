@@ -114,6 +114,13 @@ tbody tr:hover td{background:var(--surface-2)}
 .badge.neutral{background:var(--surface-2);color:var(--text-2)}
 .prio{font-weight:600}
 .star{color:var(--warn)}
+.starbtn{background:none;border:0;padding:2px 4px;margin:-2px 2px -2px -4px;cursor:pointer;font-size:16px;line-height:1;color:var(--muted);border-radius:6px;vertical-align:-1px}
+.starbtn:hover{background:var(--surface-2);color:var(--warn)}
+.starbtn.on{color:var(--warn)}
+.starbtn:focus-visible{outline:2px solid var(--accent)}
+.dhead .starbtn{font-size:22px}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);background:var(--text);color:var(--bg);padding:8px 14px;border-radius:999px;font-size:13px;opacity:0;transition:all .2s;pointer-events:none;z-index:30}
+.toast.show{opacity:1;transform:translateX(-50%)}
 .empty{padding:40px;text-align:center;color:var(--text-2)}
 .more{display:flex;justify-content:center;padding:12px}
 
@@ -201,9 +208,9 @@ details.how li{margin:4px 0}
   <div id="compBanner"></div>
 
   <div class="controls">
-    <input class="search" id="q" type="search" placeholder="Search ticker, company or industry">
+    <input class="search" id="q" type="search" placeholder="Search all companies by ticker, name or industry">
     <button class="pill" id="fComp">In my industries</button>
-    <button class="pill" id="fWatch">Watchlist</button>
+    <button class="pill" id="fWatch">★ Watchlist <span id="watchCount" class="hint"></span></button>
     <button class="pill" id="fBelow">Below MOS price</button>
     <select class="pill" id="fMin" aria-label="Minimum Big Five score">
       <option value="0">Big Five: any</option>
@@ -248,6 +255,7 @@ details.how li{margin:4px 0}
         <li><b>Sticker Price:</b> latest EPS grown at the chosen growth rate for 10 years × future P/E (2 × growth rate, capped), discounted back at your MARR. MOS price = Sticker Price × (1 − margin of safety). Free data has no analyst forecasts, so historical growth is used and capped.</li>
         <li><b>Priority score:</b> 60% Big Five quality + 40% valuation (100 at or below the MOS price, falling to 0 at the Sticker Price), minus 10 if debt takes more than 3 years to repay. Only meant to order your reading list.</li>
         <li><b>Tools:</b> Town's timing signals — price above its 10-day average, MACD (8,17,9) above its signal line, stochastic (14,5) %K above %D. Green = "buy-side". These are short-term and noisy.</li>
+        <li><b>Watchlist:</b> click ☆ next to any company to add it, ★ to remove it. Stars are saved in this browser, so your phone and computer each keep their own list. Tickers in <code>watchlist.txt</code> on GitHub start out starred everywhere.</li>
         <li><b>Limits:</b> XBRL data can be patchy (especially banks, insurers and REITs, whose statements don't fit the Big Five well). Always confirm numbers in the actual filings before acting. This is a research shortlist, not advice.</li>
       </ul>
       <div id="skippedNote" class="hint"></div>
@@ -258,6 +266,7 @@ details.how li{margin:4px 0}
 <div class="scrim" id="scrim"></div>
 <aside class="drawer" id="drawer" aria-hidden="true"><div class="inner" id="dinner"></div></aside>
 <div class="tip" id="tip"></div>
+<div class="toast" id="toast"></div>
 
 <script>
 (() => {
@@ -273,6 +282,36 @@ details.how li{margin:4px 0}
   F.q = '';
   let sortKey = LS.get('sort', 'prio'), sortDir = LS.get('sortDir', -1);
   let DATA = null, ROWS = [], shown = 60, IND = {}, compQ = '';
+  // Watchlist = stocks in watchlist.txt (c.watch) + ones starred here, minus ones un-starred here.
+  const starAdd = new Set(LS.get('starAdd', [])), starDel = new Set(LS.get('starDel', []));
+  const W = c => starAdd.has(c.t) || (c.watch && !starDel.has(c.t));
+  function toggleStar(t) {
+    const c = DATA.companies.find(x => x.t === t); if (!c) return;
+    const on = !W(c);
+    if (on) { starDel.delete(t); if (!c.watch) starAdd.add(t); }
+    else { starAdd.delete(t); if (c.watch) starDel.add(t); }
+    LS.set('starAdd', [...starAdd]); LS.set('starDel', [...starDel]);
+    toast(on ? `★ ${t} added to your watchlist` : `${t} removed from your watchlist`);
+    render();
+    if ($('#drawer').classList.contains('open')) {
+      const b = $('#dinner .starbtn'); if (b) setStarBtn(b, on, t);
+    }
+  }
+  const starBtn = (c) => { const on = W(c);
+    return `<button class="starbtn ${on ? 'on' : ''}" data-star="${esc(c.t)}" aria-pressed="${on}" title="${on ? 'Remove from' : 'Add to'} watchlist" aria-label="${on ? 'Remove ' + esc(c.t) + ' from' : 'Add ' + esc(c.t) + ' to'} watchlist">${on ? '★' : '☆'}</button>`; };
+  function setStarBtn(b, on, t) {
+    b.classList.toggle('on', on); b.textContent = on ? '★' : '☆'; b.setAttribute('aria-pressed', on);
+    b.title = (on ? 'Remove from' : 'Add to') + ' watchlist';
+  }
+  let toastTimer;
+  function toast(msg) {
+    const el = $('#toast'); el.textContent = msg; el.classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 1800);
+  }
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-star]'); if (!b) return;
+    e.stopPropagation(); e.preventDefault(); toggleStar(b.dataset.star);
+  }, true);
 
   const theme = LS.get('theme', null);
   if (theme) document.documentElement.dataset.theme = theme;
@@ -376,9 +415,9 @@ details.how li{margin:4px 0}
     const q = F.q.trim().toLowerCase();
     return ROWS.filter(r => {
       const c = r.c;
-      if (q && !(c.t.toLowerCase().includes(q) || c.name.toLowerCase().includes(q) || c.sub.toLowerCase().includes(q))) return false;
-      if (F.comp && comp.size && !r.inComp && !c.watch) return false;
-      if (F.watch && !c.watch) return false;
+      if (q) return c.t.toLowerCase().includes(q) || c.name.toLowerCase().includes(q) || c.sub.toLowerCase().includes(q);
+      if (F.watch) return W(c);
+      if (F.comp && comp.size && !r.inComp && !W(c)) return false;
       if (F.below && !(r.v.ratio != null && r.v.ratio <= 1)) return false;
       if (c.big5 < F.min) return false;
       if (F.sector && c.sector !== F.sector) return false;
@@ -399,7 +438,7 @@ details.how li{margin:4px 0}
       const c = r.c;
       return `<tr data-t="${esc(c.t)}">
         <td class="n hint">${i + 1}</td>
-        <td><div class="tick">${esc(c.t)} ${c.watch ? '<span class="star" title="Watchlist">★</span>' : ''}</div><div class="cname">${esc(c.name)}</div></td>
+        <td><div class="tick">${starBtn(c)}${esc(c.t)}</div><div class="cname">${esc(c.name)}</div></td>
         <td class="hide-sm"><div class="ind" title="${esc(c.sub)}">${esc(c.sub)}</div></td>
         <td class="n hide-sm">${big(r.mcap)}</td>
         <td><div class="scorebar"><div class="track"><div class="fill" style="width:${c.big5}%"></div></div><span class="num">${Math.round(c.big5)}</span> ${passDots(c)}</div></td>
@@ -411,12 +450,12 @@ details.how li{margin:4px 0}
         <td class="n prio">${r.prio}</td>
       </tr>`;
     }).join('');
-    $('#empty').innerHTML = list.length ? '' : '<div class="empty">No companies match these filters. Try lowering the Big Five minimum or widening your industries.</div>';
+    $('#empty').innerHTML = list.length ? '' : (F.watch && !F.q ? '<div class="empty">Your watchlist is empty. Click the ☆ next to any company to add it.</div>' : F.q ? '<div class="empty">No company matches that search. It may not be in the screen (only the S&amp;P 500 and Nasdaq-listed companies are included).</div>' : '<div class="empty">No companies match these filters. Try lowering the Big Five minimum or widening your industries.</div>');
     $('#more').innerHTML = list.length > shown ? `<button class="pill" id="showMore">Show more (${list.length - shown} left)</button>` : '';
     if (list.length > shown) $('#showMore').onclick = () => { shown += 60; render(); };
 
     // stats
-    const all = ROWS, inC = comp.size ? ROWS.filter(r => r.inComp || r.c.watch) : ROWS;
+    const all = ROWS, inC = comp.size ? ROWS.filter(r => r.inComp || W(r.c)) : ROWS;
     const strong = inC.filter(r => r.c.big5 >= 80);
     const below = strong.filter(r => r.v.ratio != null && r.v.ratio <= 1);
     $('#stats').innerHTML = [
@@ -429,6 +468,8 @@ details.how li{margin:4px 0}
     // pills
     $('#fComp').classList.toggle('on', F.comp);
     $('#fWatch').classList.toggle('on', F.watch);
+    const nW = ROWS.filter(r => W(r.c)).length;
+    $('#watchCount').textContent = nW ? `(${nW})` : '';
     $('#fBelow').classList.toggle('on', F.below);
     $('#fMin').value = String(F.min);
     $('#fSector').value = F.sector;
@@ -620,7 +661,7 @@ details.how li{margin:4px 0}
       </div>` : '<div class="hint">No price data today.</div>';
     const prompt = `Research ${c.name} (${c.t}) using Phil Town's Rule #1 "Four Ms". It scores ${Math.round(c.big5)}/100 on my Big Five screen (ROIC 10y avg ${pct(c.g.roic['10'])}, sales growth 10y ${pct(c.g.rev['10'])}, EPS growth 10y ${pct(c.g.eps['10'])}, equity growth 10y ${pct(c.g.eq['10'])}, FCF growth 10y ${pct(c.g.fcf['10'])}). Please cover: 1) Meaning — what the business does and how it makes money; 2) Moat — which of Town's five moat types it has (brand, secret, toll bridge, switching cost, price) and how durable it is; 3) Management — CEO tenure, insider ownership and recent insider buying/selling, pay structure, capital allocation, candour in shareholder letters, any red flags; 4) Margin of safety — sanity-check my Sticker Price of ${money(v.sticker)} (growth ${pct(v.g)}, future P/E ${v.pe?.toFixed(1) ?? '—'}) against analyst growth estimates. Also list the main business, industry and macro risks. Cite sources.`;
     $('#dinner').innerHTML = `
-      <div class="dhead"><div><h2>${esc(c.t)} ${c.watch ? '<span class="star">★</span>' : ''}</h2>
+      <div class="dhead"><div><h2>${starBtn(c)}${esc(c.t)}</h2>
         <div class="sub">${esc(c.name)} · ${esc(c.sub)}${c.gics ? ' · ' + esc(c.gics) : ''} · ${esc(c.index)}${r.mcap ? ' · ' + big(r.mcap) + ' market cap' : ''}</div></div>
         <button class="close" id="dclose" aria-label="Close">✕</button></div>
       <div class="stats" style="margin-top:14px">
