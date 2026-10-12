@@ -223,7 +223,9 @@ details.how li{margin:4px 0}
     <select class="pill" id="fList" aria-label="Listing">
       <option value="">All listings</option>
       <option value="S&amp;P 500">S&amp;P 500</option>
+      <option value="NYSE">NYSE-listed</option>
       <option value="Nasdaq">Nasdaq-listed</option>
+      <option value="Cboe">Cboe-listed</option>
     </select>
     <select class="pill" id="fSize" aria-label="Company size">
       <option value="0">Any size</option>
@@ -247,7 +249,7 @@ details.how li{margin:4px 0}
     <div class="body">
       <ul>
         <li><b>Data:</b> annual financials from SEC EDGAR filings (10-K), daily prices from Yahoo Finance (Stooq as backup), macro series from FRED. Refreshed each weekday after the US close.</li>
-        <li><b>Companies:</b> the S&amp;P 500 plus every Nasdaq-listed company that files annual reports with the SEC. Blank-cheque companies (SPACs), funds and companies without a recent 10-K are left out. Market cap = today's price × diluted shares from the latest annual report.</li>
+        <li><b>Companies:</b> every company listed on the NYSE, Nasdaq or Cboe (plus the S&amp;P 500) that files annual reports with the SEC. Blank-cheque companies (SPACs), funds, companies without a recent 10-K, and foreign companies reporting in another currency are left out. Over-the-counter stocks aren't included. Market cap = today's price × diluted shares from the latest annual report.</li>
         <li><b>Industries:</b> the SEC's industry classification (SIC) for every company, so the picker uses one consistent list. Sectors are the S&amp;P (GICS) sector where known, otherwise the closest match.</li>
         <li><b>Big Five score (0–100):</b> for ROIC, sales, EPS, equity (book value per share where possible) and free cash flow, the 10-, 5- and 1-year rates are scored: ≥10% scores full marks, 5–10% half. Weights 40/40/20 for 10y/5y/1y, averaged across the five. A green dot means that metric cleared 10% over both 10 and 5 years.</li>
         <li><b>ROIC</b> = after-tax operating income ÷ (equity + long-term debt). <b>Free cash flow</b> = operating cash flow − capital expenditure.</li>
@@ -450,7 +452,7 @@ details.how li{margin:4px 0}
         <td class="n prio">${r.prio}</td>
       </tr>`;
     }).join('');
-    $('#empty').innerHTML = list.length ? '' : (F.watch && !F.q ? '<div class="empty">Your watchlist is empty. Click the ☆ next to any company to add it.</div>' : F.q ? '<div class="empty">No company matches that search. It may not be in the screen (only the S&amp;P 500 and Nasdaq-listed companies are included).</div>' : '<div class="empty">No companies match these filters. Try lowering the Big Five minimum or widening your industries.</div>');
+    $('#empty').innerHTML = list.length ? '' : (F.watch && !F.q ? '<div class="empty">Your watchlist is empty. Click the ☆ next to any company to add it.</div>' : F.q ? '<div class="empty">No company matches that search. It may not be in the screen: over-the-counter stocks, funds and foreign companies reporting in another currency aren't included.</div>' : '<div class="empty">No companies match these filters. Try lowering the Big Five minimum or widening your industries.</div>');
     $('#more').innerHTML = list.length > shown ? `<button class="pill" id="showMore">Show more (${list.length - shown} left)</button>` : '';
     if (list.length > shown) $('#showMore').onclick = () => { shown += 60; render(); };
 
@@ -723,7 +725,7 @@ details.how li{margin:4px 0}
   fetch('data.json', { cache: 'no-cache' }).then(r => r.json()).then(d => {
     DATA = d;
     const gen = new Date(d.generated);
-    const U = { sp500: 'S&P 500', sp400: 'S&P 400', sp600: 'S&P 600', sp1500: 'S&P 1500', nasdaq: 'Nasdaq' };
+    const U = { sp500: 'S&P 500', sp400: 'S&P 400', sp600: 'S&P 600', sp1500: 'S&P 1500', nasdaq: 'Nasdaq', nyse: 'NYSE', cboe: 'Cboe', otc: 'OTC', us: 'all US exchanges' };
     const ulabel = String(d.universe || 'sp500').split(',').map(x => U[x.trim()] || x).join(' + ');
     $('#meta').textContent = `${d.companies.length.toLocaleString()} US companies · ${ulabel} + watchlist · updated ${gen.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`;
     industryMap();

@@ -2,8 +2,9 @@
 Rule #1 screener — builds site/data.json for the dashboard.
 
 What it does, in order:
-  1. Gets the list of companies to screen (S&P 500 + every Nasdaq-listed company by
-     default, plus watchlist.txt), and each company's SEC industry (SIC) code.
+  1. Gets the list of companies to screen (by default every company listed on a major
+     US exchange — NYSE, Nasdaq, Cboe — plus the S&P 500 and watchlist.txt), and each
+     company's SEC industry (SIC) code.
   2. Downloads up to ~10+ years of annual financials for each from SEC EDGAR (free).
   3. Works out Phil Town's "Big Five" (ROIC, sales, EPS, equity, free cash flow growth),
      the debt test, and a few management signals.
@@ -15,8 +16,10 @@ What it does, in order:
 
 Settings come from environment variables (set in the GitHub workflow):
   SEC_CONTACT  your email address — the SEC requires one in every request (required)
-  UNIVERSE     comma-separated list of: sp500, sp400, sp600, sp1500 (= all three), nasdaq.
-               Default "sp500,nasdaq".
+  UNIVERSE     comma-separated list of: sp500, sp400, sp600, sp1500 (= all three),
+               nasdaq, nyse, cboe, us (= nasdaq + nyse + cboe), otc (over-the-counter;
+               thousands of tiny companies with patchy data, not recommended).
+               Default "sp500,us".
 """
 
 import datetime as dt
@@ -34,7 +37,7 @@ import pandas as pd
 import requests
 
 SEC_CONTACT = os.environ.get("SEC_CONTACT", "").strip()
-UNIVERSE = os.environ.get("UNIVERSE", "").strip().lower() or "sp500,nasdaq"
+UNIVERSE = os.environ.get("UNIVERSE", "").strip().lower() or "sp500,us"
 OUT_DIR = os.environ.get("OUT_DIR", "site")
 CACHE_DIR = os.environ.get("CACHE_DIR", "cache")
 SEC_RATE = 8          # requests per second, kept under the SEC's limit of 10
@@ -194,6 +197,8 @@ def universe_parts():
     toks = {t.strip() for t in UNIVERSE.split(",") if t.strip()}
     if "sp1500" in toks:
         toks |= {"sp500", "sp400", "sp600"}
+    if "us" in toks:
+        toks |= {"nasdaq", "nyse", "cboe"}
     return toks
 
 
@@ -224,12 +229,24 @@ def get_index_lists(wiki_session, toks):
 SUFFIX_JUNK = ("W", "WS", "U", "R", "RT")  # warrants, units, rights
 
 
-def nasdaq_list(exch_rows):
-    """One row per company listed on Nasdaq, from the SEC's ticker/exchange file.
+EXCHANGES = {"nasdaq": "Nasdaq", "nyse": "NYSE", "cboe": "Cboe", "otc": "OTC"}
+
+
+def exchange_of(exch):
+    e = (exch or "").strip().lower()
+    for key in EXCHANGES:
+        if e.startswith(key):  # e.g. "NYSE", "NYSE American", "NYSE Arca"
+            return key
+    return None
+
+
+def exchange_list(exch_rows, key):
+    """One row per company listed on an exchange, from the SEC's ticker/exchange file.
     Companies with several tickers (share classes, warrants, units) keep the simplest one."""
+    label = EXCHANGES[key]
     by_cik = {}
     for cik, name, ticker, exch in exch_rows:
-        if not ticker or (exch or "").lower() != "nasdaq":
+        if not ticker or exchange_of(exch) != key:
             continue
         t = norm_ticker(ticker)
         best = by_cik.get(cik)
@@ -237,7 +254,7 @@ def nasdaq_list(exch_rows):
         rank = (junk, "-" in t, len(t), t)
         if best is None or rank < best[0]:
             by_cik[cik] = (rank, t, name)
-    rows = [{"ticker": t, "name": name, "sector": "", "sub": "", "index": "Nasdaq"}
+    rows = [{"ticker": t, "name": name, "sector": "", "sub": "", "index": label}
             for _, t, name in by_cik.values()]
     return pd.DataFrame(rows, columns=["ticker", "name", "sector", "sub", "index"])
 
@@ -264,7 +281,7 @@ def sec_ticker_map(sec):
         ci, ni, ti, ei = f.index("cik"), f.index("name"), f.index("ticker"), f.index("exchange")
         rows = [(int(d[ci]), d[ni], d[ti], d[ei]) for d in j["data"]]
     else:
-        log("SEC ticker/exchange file unavailable; Nasdaq list can't be built this run")
+        log("SEC ticker/exchange file unavailable; exchange lists can't be built this run")
         r = get(sec, "https://www.sec.gov/files/company_tickers.json", limiter=SEC_LIMIT)
         if r is None:
             raise SystemExit("Could not download the SEC ticker list. Check SEC_CONTACT is a real email.")
@@ -711,13 +728,14 @@ def macro(session):
 # --------------------------------------------------------------------------- main
 
 def build_universe(web, sec_rows, tick_map):
-    """One row per company (by SEC CIK), merging S&P index membership and Nasdaq listing."""
+    """One row per company (by SEC CIK), merging S&P index membership and exchange listings."""
     toks = universe_parts()
     parts = get_index_lists(web, toks)
-    if "nasdaq" in toks:
-        nd = nasdaq_list(sec_rows)
-        log(f"Nasdaq-listed companies: {len(nd)}")
-        parts.append(nd)
+    for key in EXCHANGES:
+        if key in toks:
+            lst = exchange_list(sec_rows, key)
+            log(f"{EXCHANGES[key]}-listed companies: {len(lst)}")
+            parts.append(lst)
     if not parts:
         raise SystemExit("Could not load any list of companies to screen.")
     uni = pd.concat(parts, ignore_index=True)

@@ -42,7 +42,7 @@ jobs:
       - name: Run the screener
         env:
           SEC_CONTACT: ${{ secrets.SEC_CONTACT }}
-          UNIVERSE: ${{ vars.UNIVERSE || 'sp500,nasdaq' }}
+          UNIVERSE: ${{ vars.UNIVERSE || 'sp500,us' }}
         run: python screener.py
 
       - uses: actions/configure-pages@v5
