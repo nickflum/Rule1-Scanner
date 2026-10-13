@@ -31,6 +31,10 @@ jobs:
       - name: Install
         run: pip install -r requirements.txt
 
+      # Stop early (and keep the last working site online) if the page's code is broken
+      - name: Check the dashboard page
+        run: python check_page.py dashboard.html
+
       # Remembers each company's industry code between runs so they aren't re-downloaded daily
       - name: Restore cache
         uses: actions/cache@v4

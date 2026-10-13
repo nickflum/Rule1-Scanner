@@ -452,7 +452,7 @@ details.how li{margin:4px 0}
         <td class="n prio">${r.prio}</td>
       </tr>`;
     }).join('');
-    $('#empty').innerHTML = list.length ? '' : (F.watch && !F.q ? '<div class="empty">Your watchlist is empty. Click the ☆ next to any company to add it.</div>' : F.q ? '<div class="empty">No company matches that search. It may not be in the screen: over-the-counter stocks, funds and foreign companies reporting in another currency aren't included.</div>' : '<div class="empty">No companies match these filters. Try lowering the Big Five minimum or widening your industries.</div>');
+    $('#empty').innerHTML = list.length ? '' : (F.watch && !F.q ? '<div class="empty">Your watchlist is empty. Click the ☆ next to any company to add it.</div>' : F.q ? '<div class="empty">No company matches that search. It may not be in the screen: over-the-counter stocks, funds and foreign companies reporting in another currency are not included.</div>' : '<div class="empty">No companies match these filters. Try lowering the Big Five minimum or widening your industries.</div>');
     $('#more').innerHTML = list.length > shown ? `<button class="pill" id="showMore">Show more (${list.length - shown} left)</button>` : '';
     if (list.length > shown) $('#showMore').onclick = () => { shown += 60; render(); };
 
