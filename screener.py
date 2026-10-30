@@ -585,12 +585,14 @@ def analyse(facts):
 
     years = list(range(latest - 10, latest + 1))
 
-    # Share count; where it isn't reported, work it out from net income / EPS
+    # Share count. Where it's missing, or clearly mis-scaled (some filings report shares
+    # "in thousands" by mistake), use the count implied by net income / EPS instead.
     for y in years:
-        if not s["shares"].get(y):
-            ni, e = s["net_income"].get(y), s["eps"].get(y)
-            if ni and e and abs(e) >= 0.01 and ni / e > 0:
-                s["shares"][y] = ni / e
+        ni, e = s["net_income"].get(y), s["eps"].get(y)
+        implied = ni / e if (ni and e and abs(e) >= 0.01 and ni / e > 0) else None
+        sh = s["shares"].get(y)
+        if implied and (not sh or not 0.5 <= sh / implied <= 2):
+            s["shares"][y] = implied
 
     # Book value per share (preferred) or total equity
     bvps = {}
