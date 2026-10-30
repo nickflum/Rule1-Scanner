@@ -1,0 +1,21 @@
+name: Diagnostics (temporary)
+on: workflow_dispatch
+permissions:
+  contents: write
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python diag.py
+        env:
+          SEC_CONTACT: ${{ secrets.SEC_CONTACT }}
+      - run: |
+          git config user.name "diag-bot"; git config user.email "diag@users.noreply.github.com"
+          git checkout --orphan diag
+          git rm -rq --cached . ; git add diag
+          git commit -qm "diagnostics" && git push -f origin diag
