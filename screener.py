@@ -410,10 +410,11 @@ def fy_label(end):
 
 
 def annual_series(facts, key):
-    """{fiscal_year: value} from 10-K style filings, trying each tag in order."""
+    """{fiscal_year: value} from 10-K style filings, trying each tag in order.
+    Also returns each value's period end and the date it was filed."""
     tags, instant = TAGS[key], key in INSTANT
     units_pref = UNITS.get(key, ("USD",))
-    out, out_end = {}, {}
+    out, out_end, out_filed = {}, {}, {}
     for tag in tags:
         node = None
         for ns in ("us-gaap", "ifrs-full"):
@@ -450,11 +451,80 @@ def annual_series(facts, key):
                 # keep the latest-ending period for that FY, then the most recent filing
                 if prev is None or (end, filed) > (prev[0], prev[1]):
                     best[fy] = (end, filed, e["val"])
-            for fy, (end, _, v) in best.items():
+            for fy, (end, filed, v) in best.items():
                 if fy not in out:
                     out[fy] = float(v)
                     out_end[fy] = end
-    return out, out_end
+                    out_filed[fy] = filed
+    return out, out_end, out_filed
+
+
+# --------------------------------------------------------------------------- stock splits
+#
+# After a stock split, a company's newer reports restate past per-share figures, but older
+# reports are never changed. Mixing the two makes EPS and book value per share look like they
+# collapsed (e.g. Alphabet's 20-for-1 split). We find splits by spotting the same past figure
+# reported twice with a clean split ratio between the two versions, then put every year on
+# today's share basis.
+
+def _nice_ratio(r):
+    """Return the split factor if r looks like a stock split (or reverse split), else None."""
+    if r <= 0:
+        return None
+    inv = r < 1
+    x = 1 / r if inv else r
+    if x < 1.4:
+        return None
+    for n in (1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 10, 12, 15, 20, 25, 30, 40, 50, 100):
+        if abs(x / n - 1) < 0.03:
+            return 1 / n if inv else float(n)
+    return None
+
+
+def find_splits(facts):
+    """List of (date, factor): from `date` on, figures are on a basis `factor` times more shares."""
+    cands = []
+    for key, sign in (("shares", 1), ("eps", -1)):
+        for tag in TAGS[key]:
+            node = facts.get("us-gaap", {}).get(tag)
+            if not node:
+                continue
+            groups = {}
+            for unit in node.get("units", {}).values():
+                for e in unit:
+                    if e.get("val") in (None, 0) or not e.get("filed") or not e.get("form", "").startswith(("10-K", "10-Q")):
+                        continue
+                    groups.setdefault((e.get("start"), e.get("end")), []).append((e["filed"], float(e["val"])))
+            for vals in groups.values():
+                vals = sorted(set(vals))
+                for (fa, va), (fb, vb) in zip(vals, vals[1:]):
+                    if fa == fb:
+                        continue
+                    r = _nice_ratio((vb / va) ** sign)
+                    # an EPS change alone is only trusted for clear splits (2-for-1 or more),
+                    # since restatements can move EPS by smaller amounts
+                    if r and (key == "shares" or max(r, 1 / r) >= 2):
+                        cands.append((fa, fb, r))
+    events = []  # [after, by, factor]: the split happened after `after` and by `by`
+    gap = lambda c: (dt.date.fromisoformat(c[1]) - dt.date.fromisoformat(c[0])).days
+    for fa, fb, r in sorted(cands, key=lambda c: (gap(c), c[1])):
+        inside = [ev for ev in events if fa < ev[1] and ev[0] < fb]
+        if inside:
+            for ev in inside:  # same split seen again: narrow down when it happened
+                if abs(ev[2] / r - 1) < 0.03:
+                    ev[0], ev[1] = max(ev[0], fa), min(ev[1], fb)
+            continue
+        events.append([fa, fb, r])
+    return [(ev[1], ev[2]) for ev in sorted(events, key=lambda ev: ev[1])]
+
+
+def split_factor_after(events, filed):
+    """How many of today's shares one share had when a figure was filed on `filed`."""
+    f = 1.0
+    for date, factor in events:
+        if filed < date:
+            f *= factor
+    return f
 
 
 def cagr(series, years, latest, n, min_span):
@@ -493,9 +563,17 @@ def window_score(r):
 
 
 def analyse(facts):
-    s, ends = {}, {}
+    s, ends, filed = {}, {}, {}
     for key in TAGS:
-        s[key], ends[key] = annual_series(facts, key)
+        s[key], ends[key], filed[key] = annual_series(facts, key)
+
+    # Put per-share figures from before any stock split on today's share basis
+    splits = find_splits(facts)
+    if splits:
+        for y in list(s["eps"]):
+            s["eps"][y] /= split_factor_after(splits, filed["eps"].get(y, ""))
+        for y in list(s["shares"]):
+            s["shares"][y] *= split_factor_after(splits, filed["shares"].get(y, ""))
 
     anchor = s["revenue"] or s["net_income"]
     if not anchor:
@@ -507,13 +585,21 @@ def analyse(facts):
 
     years = list(range(latest - 10, latest + 1))
 
+    # Share count; where it isn't reported, work it out from net income / EPS
+    for y in years:
+        if not s["shares"].get(y):
+            ni, e = s["net_income"].get(y), s["eps"].get(y)
+            if ni and e and abs(e) >= 0.01 and ni / e > 0:
+                s["shares"][y] = ni / e
+
     # Book value per share (preferred) or total equity
     bvps = {}
     for y in years:
         e, sh = s["equity"].get(y), s["shares"].get(y)
         if e is not None and sh:
             bvps[y] = e / sh
-    use_bvps = sum(1 for y in years if y in bvps) >= 3
+    n_bv, n_eq = sum(1 for y in years if y in bvps), sum(1 for y in years if y in s["equity"])
+    use_bvps = n_bv >= 3 and n_bv >= n_eq - 1
     equity_g = bvps if use_bvps else s["equity"]
 
     # Free cash flow
@@ -613,6 +699,8 @@ def analyse(facts):
         "debtYears": num(debt_years, 2),
         "sharesChg5": num(shares_chg5),
         "shares": num(sh_now, 0),
+        "filed": filed["eps"].get(latest) or filed["revenue"].get(latest) or "",
+        "splits": [[d, f] for d, f in splits],
         "flags": flags,
     }
     return result, None
@@ -623,6 +711,12 @@ def analyse(facts):
 def tools_from_ohlc(df):
     """Phil Town's three tools on daily bars: 10-day MA, MACD(8,17,9), stochastic(14,5)."""
     df = df.dropna(subset=["Close"])
+    splits = []
+    if "Stock Splits" in df.columns:
+        for d, f in df["Stock Splits"].items():
+            if f and f > 0 and f != 1:
+                splits.append([pd.Timestamp(d).strftime("%Y-%m-%d"), float(f)])
+    df = df.tail(260)
     if len(df) < 30:
         return None
     c, h, l = df["Close"], df["High"].fillna(df["Close"]), df["Low"].fillna(df["Close"])
@@ -641,7 +735,28 @@ def tools_from_ohlc(df):
         "stoch": bool(k.iloc[-1] > d.iloc[-1]) if not math.isnan(d.iloc[-1]) else None,
         "chg1y": num(c.iloc[-1] / c.iloc[0] - 1),
         "spark": [num(v, 2) for v in c.iloc[-130::5].tolist()],
+        "splits": splits,
     }
+
+
+def adjust_recent_splits(c, price_splits):
+    """A split after the latest annual report: prices are already on the new basis, so put
+    EPS and book value per share on it too (unless the SEC data already showed the split)."""
+    for date, f in price_splits:
+        if not c.get("filed") or date <= c["filed"]:
+            continue
+        known = any(abs(kf / f - 1) < 0.03 and 0 <= (dt.date.fromisoformat(kd) - dt.date.fromisoformat(date)).days < 200
+                    for kd, kf in c.get("splits", []))
+        if known:
+            continue
+        if c.get("eps") is not None:
+            c["eps"] = num(c["eps"] / f, 3)
+        c["series"]["eps"] = [num(v / f, 3) if v is not None else None for v in c["series"]["eps"]]
+        if c.get("eqBasis") == "book value per share":
+            c["series"]["eq"] = [num(v / f, 3) if v is not None else None for v in c["series"]["eq"]]
+        if c.get("shares"):
+            c["shares"] = num(c["shares"] * f, 0)
+        c.setdefault("splits", []).append([date, f])
 
 
 def prices_yahoo(tickers):
@@ -654,8 +769,8 @@ def prices_yahoo(tickers):
     for i in range(0, len(tickers), 100):
         chunk = tickers[i:i + 100]
         try:
-            data = yf.download(chunk, period="1y", interval="1d", group_by="ticker",
-                               auto_adjust=False, threads=True, progress=False)
+            data = yf.download(chunk, period="2y", interval="1d", group_by="ticker",
+                               auto_adjust=False, actions=True, threads=True, progress=False)
         except Exception as e:  # noqa: BLE001
             log(f"  yfinance chunk failed: {e}")
             continue
@@ -849,6 +964,8 @@ def main():
     for c in companies:
         p = px.get(c["t"])
         c["px"] = p
+        if p:
+            adjust_recent_splits(c, p.pop("splits", []))
     log(f"Prices for {sum(1 for c in companies if c['px'])}/{len(companies)}")
 
     mac = macro(web)

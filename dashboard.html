@@ -194,7 +194,7 @@ details.how li{margin:4px 0}
       <label>Margin of safety %<input type="number" id="aMos" min="0" max="80" step="5"><span class="hint">Buy at this % below Sticker Price. Town uses 50%</span></label>
       <label>Growth rate cap %<input type="number" id="aCap" min="5" max="30" step="1"><span class="hint">Caps optimistic history</span></label>
       <label>Maximum future P/E<input type="number" id="aPe" min="5" max="60" step="1"><span class="hint">Future P/E = 2 × growth rate, capped here</span></label>
-      <label>Growth rate based on<select id="aBasis"><option value="min">Lower of equity &amp; EPS growth</option><option value="eq">Equity growth only</option></select><span class="hint">Stands in for analyst estimates (not free)</span></label>
+      <label>Growth rate based on<select id="aBasis"><option value="min">Lower of equity &amp; EPS growth (Town)</option><option value="eq">Equity growth only</option><option value="eps">EPS growth only</option></select><span class="hint">Each is the average of its 10- and 5-year rates. EPS-only suits companies that buy back lots of shares, which holds down equity growth</span></label>
     </div>
     <div style="margin-top:12px"><button class="pill" id="aReset">Reset to Town's defaults</button></div>
   </div>
@@ -254,7 +254,8 @@ details.how li{margin:4px 0}
         <li><b>Big Five score (0–100):</b> for ROIC, sales, EPS, equity (book value per share where possible) and free cash flow, the 10-, 5- and 1-year rates are scored: ≥10% scores full marks, 5–10% half. Weights 40/40/20 for 10y/5y/1y, averaged across the five. A green dot means that metric cleared 10% over both 10 and 5 years.</li>
         <li><b>ROIC</b> = after-tax operating income ÷ (equity + long-term debt). <b>Free cash flow</b> = operating cash flow − capital expenditure.</li>
         <li><b>Debt test:</b> years of current free cash flow needed to repay long-term debt. Town wants 3 or fewer.</li>
-        <li><b>Sticker Price:</b> latest EPS grown at the chosen growth rate for 10 years × future P/E (2 × growth rate, capped), discounted back at your MARR. MOS price = Sticker Price × (1 − margin of safety). Free data has no analyst forecasts, so historical growth is used and capped.</li>
+        <li><b>Sticker Price:</b> latest EPS grown at the chosen growth rate for 10 years × future P/E (2 × growth rate, capped), discounted back at your MARR. MOS price = Sticker Price × (1 − margin of safety). Free data has no analyst forecasts, so the growth rate is the lower of historical equity growth and EPS growth (each the average of the 10- and 5-year rates), capped. Companies that lose money or have shrinking equity/EPS get no Sticker Price — the badge says why. Very low growth gives a very low Sticker Price; that's the method telling you it isn't a Rule #1 business.</li>
+        <li><b>Stock splits:</b> per-share history (EPS, book value per share) is adjusted for splits, using restated figures in later SEC filings and, for very recent splits, the price history.</li>
         <li><b>Priority score:</b> 60% Big Five quality + 40% valuation (100 at or below the MOS price, falling to 0 at the Sticker Price), minus 10 if debt takes more than 3 years to repay. Only meant to order your reading list.</li>
         <li><b>Tools:</b> Town's timing signals — price above its 10-day average, MACD (8,17,9) above its signal line, stochastic (14,5) %K above %D. Green = "buy-side". These are short-term and noisy.</li>
         <li><b>Watchlist:</b> click ☆ next to any company to add it, ★ to remove it. Stars are saved in this browser, so your phone and computer each keep their own list. Tickers in <code>watchlist.txt</code> on GitHub start out starred everywhere.</li>
@@ -338,16 +339,23 @@ details.how li{margin:4px 0}
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
   // ------------------------------------------------------------ valuation
+  const avgGrowth = (c, k) => {
+    const v = [c.g?.[k]?.['10'], c.g?.[k]?.['5']].filter(x => x != null);
+    return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+  };
+  // reason (when there's no usable Sticker Price): loss | nohist | nogrowth
   function value(c) {
-    const out = { g: null, pe: null, sticker: null, mos: null, ratio: null, futEps: null, futPrice: null, curPe: null };
+    const out = { g: null, rawG: null, pe: null, sticker: null, mos: null, ratio: null, futEps: null, futPrice: null, curPe: null, reason: null };
     const price = c.px?.price ?? null;
     if (c.eps != null && c.eps > 0 && price) out.curPe = price / c.eps;
-    const pick = k => [c.g?.[k]?.['10'], c.g?.[k]?.['5']].filter(v => v != null);
-    let cands = pick('eq');
-    if (A.basis === 'min') cands = cands.concat(pick('eps'));
-    if (!cands.length || c.eps == null || c.eps <= 0) return out;
-    let g = Math.min(...cands);
-    g = Math.max(0, Math.min(g, A.cap / 100));
+    if (c.eps == null || c.eps <= 0) { out.reason = 'loss'; return out; }
+    const eqG = avgGrowth(c, 'eq'), epsG = avgGrowth(c, 'eps');
+    const both = [eqG, epsG].filter(x => x != null);
+    let g = A.basis === 'eq' ? (eqG ?? epsG) : A.basis === 'eps' ? (epsG ?? eqG) : (both.length ? Math.min(...both) : null);
+    if (g == null) { out.reason = 'nohist'; return out; }
+    out.rawG = g;
+    if (g <= 0) { out.reason = 'nogrowth'; return out; }
+    g = Math.min(g, A.cap / 100);
     out.g = g;
     let pe = Math.min(2 * g * 100, A.pe);
     out.pe = pe;
@@ -358,6 +366,11 @@ details.how li{margin:4px 0}
     if (price && out.mos > 0) out.ratio = price / out.mos;
     return out;
   }
+  const REASON = {
+    loss: ['Loss-making', 'EPS is zero or negative, so Town\u2019s method can\u2019t value it'],
+    nohist: ['Too little history', 'Not enough years of reported figures to measure growth'],
+    nogrowth: ['Not growing', 'Equity or earnings per share have shrunk over 5\u201310 years'],
+  };
   function priority(c, v) {
     let vs = 0;
     if (v.ratio != null && v.sticker > 0) {
@@ -372,7 +385,10 @@ details.how li{margin:4px 0}
   }
   function valBadge(c, v) {
     if (!c.px) return '<span class="badge neutral">No price</span>';
-    if (v.sticker == null || v.sticker <= 0) return '<span class="badge neutral">No Sticker</span>';
+    if (v.sticker == null || v.sticker <= 0) {
+      const [lab, tip] = REASON[v.reason] || ['No Sticker', ''];
+      return `<span class="badge neutral" data-tip="${tip}">${lab}</span>`;
+    }
     const p = c.px.price;
     if (p <= v.mos) return '<span class="badge good">✓ Below MOS</span>';
     if (p <= v.sticker) return `<span class="badge warn">◐ ${Math.round((p / v.mos - 1) * 100)}% above MOS</span>`;
@@ -645,8 +661,8 @@ details.how li{margin:4px 0}
         <span class="k total">MOS price (${A.mos}% off)</span><span class="v total">${money(v.mos)}</span>
         <span class="k">Today's price</span><span class="v">${money(px?.price)} ${px ? `<span class="hint">${px.date}</span>` : ''}</span>
         <span class="k">Today's P/E</span><span class="v">${v.curPe ? v.curPe.toFixed(1) : '—'}</span>
-      </div><div style="margin-top:10px">${valBadge(c, v)}</div>`
-      : `<div class="hint">No Sticker Price: ${c.eps == null || c.eps <= 0 ? 'EPS is zero or negative.' : 'not enough growth history.'}</div>`;
+      </div><div style="margin-top:10px">${valBadge(c, v)}</div>${v.g < 0.05 ? `<div class="hint" style="margin-top:6px">Growth under 5% gives a P/E of ${v.pe.toFixed(1)}, so the Sticker Price is low by design: Town looks for 10%+ growth.</div>` : ''}`
+      : `<div class="hint">No Sticker Price: ${(REASON[v.reason] || ['', 'not enough data'])[1]}${v.reason === 'nogrowth' ? ` (growth used: ${pct(v.rawG)}). Try \u201cEPS growth only\u201d under Assumptions if the company buys back a lot of shares` : ''}.</div>`;
     const sh = c.sharesChg5;
     const mgmt = `<div class="kv">
         <span class="k">Debt payoff from FCF</span><span class="v">${debtBadge(c.debtYears)}</span>
