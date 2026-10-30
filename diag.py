@@ -7,7 +7,8 @@ ua = {"User-Agent": f"Rule1Screener {os.environ['SEC_CONTACT']}"}
 d = requests.get("https://nickflum.github.io/Rule1-Scanner/data.json", timeout=120).json()
 cs = d["companies"]
 def growth(c):
-    vals = [c["g"][k][w] for k in ("eq", "eps") for w in ("10", "5") if c["g"][k][w] is not None]
+    avg = lambda k: (lambda v: sum(v) / len(v) if v else None)([c["g"][k][w] for w in ("10", "5") if c["g"][k][w] is not None])
+    vals = [x for x in (avg("eq"), avg("eps")) if x is not None]
     return min(vals) if vals else None
 rows = []
 for c in cs:
@@ -20,6 +21,10 @@ summary = {}
 for r in rows:
     summary.setdefault(r["why"], [0, 0]); summary[r["why"]][0] += 1
     if r["big5"] >= 50: summary[r["why"]][1] += 1
+by_t = {c["t"]: c for c in cs}
+json.dump({t: {k: by_t[t].get(k) for k in ("eps", "series", "g", "splits", "big5")} for t in
+           ("GOOGL", "NVDA", "AAPL", "AMZN", "WMT", "CMG", "AVGO", "FTNT", "ANET", "GRMN", "BMI", "MA", "RL") if t in by_t},
+          open("diag/live_samples.json", "w"), indent=1)
 json.dump({"n": len(cs), "summary_all_vs_big5ge50": summary,
            "big5ge50_problem": [r for r in rows if r["big5"] >= 50 and r["why"] not in ("ok",)][:400]},
           open("diag/summary.json", "w"), indent=1)
